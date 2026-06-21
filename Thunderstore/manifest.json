@@ -1,0 +1,9 @@
+{
+  "name": "CaptainValheim",
+  "version_number": "1.0.0",
+  "website_url": "https://discord.gg/pdHgy6Bsng",
+  "description": "Configurable shield attacks, throws, charges, reflects, and block charges for Valheim.",
+  "dependencies": [
+    "denikson-BepInExPack_Valheim-5.4.2202"
+  ]
+}

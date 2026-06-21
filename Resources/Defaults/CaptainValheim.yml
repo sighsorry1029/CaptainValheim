@@ -1,0 +1,53 @@
+# Root key = `Global` fallback defaults or a shield prefab name from ObjectDB.
+# Listed prefabs inherit `Global`; omitted fields keep inherited or built-in defaults.
+# Set a mode block's `enabled: false` to disable that feature after inheritance.
+
+Global:
+  primaryAttack:
+    enabled: true
+    durabilityFactor: 1.00 # Primary attack durability cost = shield useDurabilityDrain * durabilityFactor
+    staminaFactor: 0.80     # Primary attack rawStamina = sqrt(baseBlockPower) * staminaFactor
+    pushFactor: 1.00        # Primary attack push = deflectionForce * pushFactor
+    damageFactor: 0.40      # Primary attack damage = blockPower * damageFactor
+  throw:
+    enabled: true
+    durabilityFactor: 1.00 # Throw durability cost = shield useDurabilityDrain * durabilityFactor
+    staminaFactor: 2.00     # Throw rawStamina = sqrt(baseBlockPower) * staminaFactor
+    pushFactor: 3.00        # Throw push = deflectionForce * pushFactor
+    damageFactor: 0.80      # Throw damage = blockPower * damageFactor
+    targets: 3              # Max enemy hits, including the first enemy hit.
+    damageDecay: 0.50       # nextDamage *= (1 - damageDecay)
+    ttlFactor: 1.00         # ttl = max(0.30, ttlFactor / cbrt(deflectionForce / 20))
+    radiusFactor: 6.00      # bounceSearchRadius = radiusFactor / cbrt(deflectionForce / 20)
+  charge:
+    enabled: true
+    cooldown: 10.0          # Charge base cooldown
+    cooldownReductionFactor: 0.50 # cooldown *= 1 - BlockingSkill / 100 * cooldownReductionFactor
+    durabilityFactor: 2.00 # Charge durability cost = shield useDurabilityDrain * durabilityFactor
+    staminaFactor: 3.00     # Charge rawStamina = sqrt(baseBlockPower) * staminaFactor
+    pushFactor: 6.00        # Charge push = deflectionForce * pushFactor
+    damageFactor: 1.20      # Charge damage = blockPower * damageFactor
+    distance: 4.0           # Charge travel distance
+    speed: 12.0             # Charge travel speed
+    hitRadiusFactor: 0.40   # Charge hitRadius = sqrt(deflectionForce / 20) * hitRadiusFactor
+  reflect:
+    enabled: true           # Enable guard-based projectile reflection.
+    staminaFactor: 2.0      # totalReflectStamina = vanillaBlockStaminaCost * staminaFactor
+    reflectionFactor: 0.01  # reflectPowerScale = deflectionForce * reflectionFactor
+  blockCharge:
+    enabled: true           # Enable Valheim's vanilla block-charge counterattack.
+                            # Missing vanilla charge VFX are filled up to the final chargeCount.
+                            # Shields with zero attack damage get 5 generic block-charge damage.
+
+ShieldWoodTower:
+  primaryAttack:
+    enabled: true
+    damageFactor: 0.50 # Example partial override; other fields inherit Global.
+  # Example blockCharge override. Omitted fields keep each shield prefab's vanilla values.
+  # Vanilla normal shields/bucklers: chargeCount 3, decayTime 1.0, blockingDecayFactor 0.25
+  # Vanilla tower shields: chargeCount 5, decayTime 4.0, blockingDecayFactor 0.5
+  # blockCharge:
+  #   enabled: true
+  #   chargeCount: 5
+  #   decayTime: 4.0
+  #   blockingDecayFactor: 0.5
