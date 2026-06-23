@@ -2,7 +2,7 @@
   "name": "CaptainValheim",
   "version_number": "1.0.0",
   "website_url": "https://discord.gg/pdHgy6Bsng",
-  "description": "Configurable shield attacks, throws, charges, reflects, and block charges for Valheim.",
+  "description": "Turns Valheim shields into active weapons with server-synced YAML for shield strikes, throws, charges, projectile reflection, and block charges, scaling damage, push, stamina, durability, cooldowns, and travel from real shield stats.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2202"
   ]
