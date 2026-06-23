@@ -7,7 +7,7 @@ internal static class SecondaryAttackRuntimeContext
 {
     private static readonly ConditionalWeakTable<Attack, ActiveSecondaryAttack> ActiveAttacks = new();
     private static readonly ConditionalWeakTable<Projectile, ProjectileAttackAttribution> ProjectileAttackAttributions = new();
-    private static readonly List<ProjectileHitContext> ActiveProjectileHitContexts = new();
+    private static readonly List<ProjectileHitContext> ActiveProjectileHitContexts = new(4);
 
     internal static void SetActiveAttack(Attack attack, ActiveSecondaryAttack activeAttack)
     {

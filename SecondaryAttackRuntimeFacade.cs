@@ -38,11 +38,6 @@ internal static class SecondaryAttackRuntimeFacade
         return SecondaryAttackFacade.CurrentAppliedWorldSnapshot.DefinitionsByPrefabName.TryGetValue(currentAttack.m_weapon.m_dropPrefab.name, out definition!);
     }
 
-    internal static bool CanStartConfiguredSecondary(Humanoid humanoid, ItemDrop.ItemData weapon)
-    {
-        return true;
-    }
-
     internal static bool BeginProjectileHitContext(Projectile projectile, UnityEngine.Collider collider, UnityEngine.Vector3 hitPoint, bool water, UnityEngine.Vector3 normal)
     {
         if (projectile == null || collider == null)
@@ -106,9 +101,5 @@ internal static class SecondaryAttackRuntimeFacade
         }
 
         return true;
-    }
-
-    internal static void TryUpdateSecondaryProjectileHoldRepeat(Player player, bool secondaryAttackHold)
-    {
     }
 }

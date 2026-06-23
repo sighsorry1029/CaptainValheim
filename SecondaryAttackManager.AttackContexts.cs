@@ -5,6 +5,7 @@ namespace CaptainValheim;
 
 internal static partial class SecondaryAttackManager
 {
+    // Public compatibility bridge for external integrations. Internal runtime code should call SecondaryAttackRuntimeFacade directly.
     public static bool BeginProjectileHitContext(Projectile projectile, Collider collider, Vector3 hitPoint, bool water, Vector3 normal)
     {
         return SecondaryAttackRuntimeFacade.BeginProjectileHitContext(projectile, collider, hitPoint, water, normal);
@@ -43,13 +44,14 @@ internal static partial class SecondaryAttackManager
 
     internal static void FinalizeBlockAttack(Humanoid humanoid, bool result, HitData hit, BlockAttackContext context)
     {
-        if (!result || context.Player == null || context.Blocker == null || context.Definition == null || context.ProjectileContext == null)
+        if (!result || context.Player == null || context.Blocker == null || context.Definition == null || !context.ProjectileContext.HasValue)
         {
             return;
         }
 
-        Projectile projectile = context.ProjectileContext.Projectile;
-        if (projectile == null || context.ProjectileContext.Water || !projectile.m_blockable || ShieldRuntimeSystem.IsReflectedProjectile(projectile))
+        ProjectileHitContext projectileContext = context.ProjectileContext.Value;
+        Projectile projectile = projectileContext.Projectile;
+        if (projectile == null || projectileContext.Water || !projectile.m_blockable || ShieldRuntimeSystem.IsReflectedProjectile(projectile))
         {
             return;
         }
@@ -60,7 +62,7 @@ internal static partial class SecondaryAttackManager
             return;
         }
 
-        if (!TryReflectShieldProjectile(context.Player, context.Blocker, context.Definition, context.ProjectileContext))
+        if (!TryReflectShieldProjectile(context.Player, context.Blocker, context.Definition, projectileContext))
         {
             return;
         }

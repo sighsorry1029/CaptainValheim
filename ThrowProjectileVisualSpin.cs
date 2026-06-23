@@ -5,6 +5,7 @@ namespace CaptainValheim;
 internal sealed class ThrowProjectileVisualSpin : MonoBehaviour
 {
     private const float DegreesPerSecond = 720f;
+    private const float ForwardEpsilonSqr = 0.0001f;
 
     internal enum AxisMode
     {
@@ -69,6 +70,11 @@ internal sealed class ThrowProjectileVisualSpin : MonoBehaviour
             return;
         }
 
+        if (IsConfigured(visual, axisMode, horizontalForward))
+        {
+            return;
+        }
+
         if (axisMode == AxisMode.None)
         {
             ThrowProjectileVisualSpin? existing = visual.GetComponent<ThrowProjectileVisualSpin>();
@@ -84,6 +90,39 @@ internal sealed class ThrowProjectileVisualSpin : MonoBehaviour
         spin._axisMode = axisMode;
         spin._horizontalForward = Vector3.ProjectOnPlane(horizontalForward, Vector3.up);
         spin._hasHorizontalForward = axisMode == AxisMode.HorizontalSide && spin._horizontalForward.sqrMagnitude > 0.001f;
+    }
+
+    internal static bool IsConfigured(GameObject? visual, AxisMode axisMode = AxisMode.HorizontalSide, Vector3 horizontalForward = default)
+    {
+        if (visual == null)
+        {
+            return false;
+        }
+
+        ThrowProjectileVisualSpin? spin = visual.GetComponent<ThrowProjectileVisualSpin>();
+        if (axisMode == AxisMode.None)
+        {
+            return spin == null;
+        }
+
+        return spin != null && spin.enabled && spin.Matches(axisMode, horizontalForward);
+    }
+
+    private bool Matches(AxisMode axisMode, Vector3 horizontalForward)
+    {
+        if (_axisMode != axisMode)
+        {
+            return false;
+        }
+
+        Vector3 projectedForward = Vector3.ProjectOnPlane(horizontalForward, Vector3.up);
+        bool hasHorizontalForward = axisMode == AxisMode.HorizontalSide && projectedForward.sqrMagnitude > 0.001f;
+        if (_hasHorizontalForward != hasHorizontalForward)
+        {
+            return false;
+        }
+
+        return !hasHorizontalForward || (_horizontalForward - projectedForward).sqrMagnitude <= ForwardEpsilonSqr;
     }
 }
 
@@ -136,6 +175,7 @@ internal static class ProjectileSpinAxis
 
 internal sealed class ThrowProjectileVisualRotationOffset : MonoBehaviour
 {
+    private const float OffsetEpsilonSqr = 0.0001f;
     private bool _hasBaseRotation;
     private Quaternion _baseLocalRotation;
     private Vector3 _offset;
@@ -155,25 +195,18 @@ internal sealed class ThrowProjectileVisualRotationOffset : MonoBehaviour
 
     private void Apply(Vector3 offset)
     {
+        if (_hasBaseRotation && (offset - _offset).sqrMagnitude <= OffsetEpsilonSqr)
+        {
+            return;
+        }
+
         if (!_hasBaseRotation)
         {
             _baseLocalRotation = transform.localRotation;
             _hasBaseRotation = true;
         }
 
-        if (Approximately(_offset, offset))
-        {
-            return;
-        }
-
         _offset = offset;
         transform.localRotation = _baseLocalRotation * Quaternion.Euler(offset);
-    }
-
-    private static bool Approximately(Vector3 left, Vector3 right)
-    {
-        return Mathf.Approximately(left.x, right.x) &&
-               Mathf.Approximately(left.y, right.y) &&
-               Mathf.Approximately(left.z, right.z);
     }
 }

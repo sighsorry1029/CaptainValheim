@@ -28,6 +28,8 @@ internal static class SecondaryAttackFacade
     private static int _nextSnapshotId = 1;
     private static bool _suppressSyncedYamlChanged;
     private static YamlAuthorityMode _yamlAuthorityMode;
+    private static string _currentYamlFingerprint = string.Empty;
+    private static string? _pendingYamlFingerprint;
 
     internal static SecondaryAttackCompiledSnapshot CurrentCompiledSnapshot => _currentCompiledSnapshot;
 
@@ -108,8 +110,8 @@ internal static class SecondaryAttackFacade
             return;
         }
 
-        Directory.CreateDirectory(SecondaryAttackManager.ConfigDirectoryPathForFacade);
-        _watcher = new FileSystemWatcher(SecondaryAttackManager.ConfigDirectoryPathForFacade, SecondaryAttackManager.ShieldsYamlFileNameForLoader);
+        Directory.CreateDirectory(SecondaryAttackYamlDomainRegistry.ConfigDirectoryPath);
+        _watcher = new FileSystemWatcher(SecondaryAttackYamlDomainRegistry.ConfigDirectoryPath, SecondaryAttackYamlDomainRegistry.ShieldsYamlFileName);
         _watcher.Changed += OnYamlFileChanged;
         _watcher.Created += OnYamlFileChanged;
         _watcher.Renamed += OnYamlFileChanged;
@@ -126,7 +128,7 @@ internal static class SecondaryAttackFacade
         }
 
         DateTime now = DateTime.Now;
-        if (now.Ticks - _lastYamlReloadTime.Ticks < SecondaryAttackManager.ReloadDelayTicksForFacade)
+        if (now.Ticks - _lastYamlReloadTime.Ticks < SecondaryAttackYamlDomainRegistry.ReloadDelayTicks)
         {
             return;
         }
@@ -202,16 +204,16 @@ internal static class SecondaryAttackFacade
                 else
                 {
                     _pendingCompiledSnapshot = null;
+                    _pendingYamlFingerprint = null;
                     _hasPendingConfig = false;
                     _hasPendingWorldReapply = false;
                     _currentCompiledSnapshot = SecondaryAttackCompiledSnapshot.Empty;
+                    _currentYamlFingerprint = string.Empty;
                     _currentAppliedWorldSnapshot = SecondaryAttackAppliedWorldSnapshot.Empty;
                     if (ZNetScene.instance != null)
                     {
                         ApplyCompiledSnapshotToZNetScene(ZNetScene.instance, _currentCompiledSnapshot, emitMissingWarnings: true);
                     }
-
-                    SecondaryAttackManager.RefreshLocalPlayerRuntimeWeaponDefinitions();
                 }
 
                 CaptainValheimPlugin.ModLogger.LogInfo("CaptainValheim YAML authority mode: SyncedOnly.");
@@ -278,17 +280,25 @@ internal static class SecondaryAttackFacade
 
     private static void ApplyYamlTexts(SecondaryAttackYamlTexts yamlTexts)
     {
+        string fingerprint = yamlTexts.GetContentFingerprint();
+        if (string.Equals(_currentYamlFingerprint, fingerprint, StringComparison.Ordinal) ||
+            (_hasPendingConfig && string.Equals(_pendingYamlFingerprint, fingerprint, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
         if (!SecondaryAttackConfigLoader.TryCompileSnapshot(_nextSnapshotId++, yamlTexts, out SecondaryAttackCompiledSnapshot? snapshot))
         {
             return;
         }
 
-        StageConfig(snapshot!);
+        StageConfig(snapshot!, fingerprint);
     }
 
-    private static void StageConfig(SecondaryAttackCompiledSnapshot snapshot)
+    private static void StageConfig(SecondaryAttackCompiledSnapshot snapshot, string fingerprint)
     {
         _pendingCompiledSnapshot = snapshot;
+        _pendingYamlFingerprint = fingerprint;
         _hasPendingConfig = true;
         CommitPendingConfig(force: true, applyToObjectDbImmediately: true);
     }
@@ -312,7 +322,9 @@ internal static class SecondaryAttackFacade
         }
 
         _currentCompiledSnapshot = _pendingCompiledSnapshot;
+        _currentYamlFingerprint = _pendingYamlFingerprint ?? _currentYamlFingerprint;
         _pendingCompiledSnapshot = null;
+        _pendingYamlFingerprint = null;
         _hasPendingConfig = false;
 
         if (applyToObjectDbImmediately && ObjectDB.instance != null)
@@ -359,7 +371,6 @@ internal static class SecondaryAttackFacade
         }
 
         _currentAppliedWorldSnapshot = SecondaryAttackWorldApplySystem.Apply(objectDb, compiledSnapshot, emitMissingWarnings);
-        SecondaryAttackManager.RefreshLocalPlayerRuntimeWeaponDefinitions();
     }
 
     private static void ApplyCompiledSnapshotToZNetScene(

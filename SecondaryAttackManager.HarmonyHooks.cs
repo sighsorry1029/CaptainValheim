@@ -68,7 +68,7 @@ internal static class ObjectDbCopyOtherDbPatch
 {
     private static void Postfix(ObjectDB __instance)
     {
-        SecondaryAttackFacade.ApplyPendingConfigToObjectDb(__instance, emitMissingWarnings: true);
+        SecondaryAttackFacade.ApplyPendingConfigToObjectDb(__instance, emitMissingWarnings: false);
     }
 }
 

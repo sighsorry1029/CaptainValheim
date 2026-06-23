@@ -9,14 +9,19 @@ internal static class ShieldOnlyKeyHintSystem
 {
     private static KeyHints? _activeKeyHints;
     private static readonly List<KeyHintCell> HintCells = [];
+    private static readonly List<ShieldHintRow> ReusableRows = [];
+    private static ShieldHintState _lastHintState = ShieldHintState.Hidden;
+    private static bool _hasLastHintState;
     private static bool _showingHints;
 
     internal static void InitializeKeyHints(KeyHints hints)
     {
         _activeKeyHints = hints;
         DestroyHints();
+        _hasLastHintState = false;
+        _lastHintState = ShieldHintState.Hidden;
         _showingHints = false;
-        UpdateKeyHint(hints);
+        UpdateKeyHint(hints, force: true);
     }
 
     internal static void RefreshKeyHintUi()
@@ -27,7 +32,7 @@ internal static class ShieldOnlyKeyHintSystem
         }
     }
 
-    internal static void UpdateKeyHint(KeyHints hints)
+    internal static void UpdateKeyHint(KeyHints hints, bool force = false)
     {
         if (hints == null)
         {
@@ -46,13 +51,21 @@ internal static class ShieldOnlyKeyHintSystem
             return;
         }
 
-        if (!TryBuildHintRows(out List<ShieldHintRow> rows) || rows.Count == 0)
+        if (!TryBuildHintState(out ShieldHintState state) || !state.HasRows)
         {
             HideHints();
+            RememberHintState(ShieldHintState.Hidden);
             return;
         }
 
-        EnsureHints(hints, rows.Count);
+        if (!force && _showingHints && _hasLastHintState && _lastHintState.Equals(state))
+        {
+            PrepareCombatHintGroup(hints);
+            return;
+        }
+
+        BuildHintRows(state, ReusableRows);
+        EnsureHints(hints, ReusableRows.Count);
         if (HintCells.Count == 0)
         {
             return;
@@ -62,25 +75,26 @@ internal static class ShieldOnlyKeyHintSystem
         for (int index = 0; index < HintCells.Count; index++)
         {
             KeyHintCell cell = HintCells[index];
-            if (index >= rows.Count)
+            if (index >= ReusableRows.Count)
             {
                 cell.SetActive(false);
                 continue;
             }
 
-            ShieldHintRow row = rows[index];
+            ShieldHintRow row = ReusableRows[index];
             cell.Set(row.Label, row.Keys, hideExtraTexts: row.Keys.Count <= 1);
             cell.RebuildParentLayout();
         }
 
+        RememberHintState(state);
         _showingHints = true;
     }
 
-    private static bool TryBuildHintRows(out List<ShieldHintRow> rows)
+    private static bool TryBuildHintState(out ShieldHintState state)
     {
-        rows = [];
+        state = ShieldHintState.Hidden;
         Player? player = Player.m_localPlayer;
-        if (!ShouldShowCombatHints(player))
+        if (player == null || !ShouldShowCombatHints(player))
         {
             return false;
         }
@@ -95,22 +109,32 @@ internal static class ShieldOnlyKeyHintSystem
             return false;
         }
 
-        if (shieldBehavior.HasShieldCharge && shieldBehavior.ShieldChargeDistance > 0f)
+        state = new ShieldHintState(
+            leftItem.m_dropPrefab != null ? leftItem.m_dropPrefab.name : leftItem.m_shared.m_name,
+            ZInput.IsGamepadActive(),
+            shieldBehavior.HasShieldCharge && shieldBehavior.ShieldChargeDistance > 0f,
+            shieldBehavior.HasShieldPrimaryAttack,
+            shieldBehavior.HasShieldThrow);
+        return state.HasRows;
+    }
+
+    private static void BuildHintRows(ShieldHintState state, List<ShieldHintRow> rows)
+    {
+        rows.Clear();
+        if (state.HasCharge)
         {
             rows.Add(new ShieldHintRow("Charge", [ResolveButtonLabel("Block"), ResolveButtonLabel("SecondaryAttack")]));
         }
 
-        if (shieldBehavior.HasShieldPrimaryAttack)
+        if (state.HasPrimaryAttack)
         {
             rows.Add(new ShieldHintRow("Attack", [ResolveButtonLabel("Attack")]));
         }
 
-        if (shieldBehavior.HasShieldThrow)
+        if (state.HasThrow)
         {
             rows.Add(new ShieldHintRow("Throw", [ResolveButtonLabel("SecondaryAttack")]));
         }
-
-        return true;
     }
 
     private static bool ShouldAllowCustomCombatHints(KeyHints hints)
@@ -186,8 +210,7 @@ internal static class ShieldOnlyKeyHintSystem
         {
             KeyHintCell? cell = KeyHintCell.CloneFrom(
                 template,
-                $"CaptainValheim_ShieldOnlyHint_{HintCells.Count}",
-                hideOnRestore: true);
+                $"CaptainValheim_ShieldOnlyHint_{HintCells.Count}");
             if (cell == null)
             {
                 break;
@@ -309,6 +332,39 @@ internal static class ShieldOnlyKeyHintSystem
         HintCells.Clear();
     }
 
+    private static void RememberHintState(ShieldHintState state)
+    {
+        _lastHintState = state;
+        _hasLastHintState = true;
+    }
+
+    private readonly struct ShieldHintState(
+        string weaponPrefabName,
+        bool gamepad,
+        bool hasCharge,
+        bool hasPrimaryAttack,
+        bool hasThrow)
+    {
+        internal static readonly ShieldHintState Hidden = new("", false, false, false, false);
+
+        private readonly string _weaponPrefabName = weaponPrefabName;
+        private readonly bool _gamepad = gamepad;
+        internal readonly bool HasCharge = hasCharge;
+        internal readonly bool HasPrimaryAttack = hasPrimaryAttack;
+        internal readonly bool HasThrow = hasThrow;
+
+        internal bool HasRows => HasCharge || HasPrimaryAttack || HasThrow;
+
+        internal bool Equals(ShieldHintState other)
+        {
+            return _gamepad == other._gamepad &&
+                   HasCharge == other.HasCharge &&
+                   HasPrimaryAttack == other.HasPrimaryAttack &&
+                   HasThrow == other.HasThrow &&
+                   string.Equals(_weaponPrefabName, other._weaponPrefabName, System.StringComparison.Ordinal);
+        }
+    }
+
     private readonly struct ShieldHintRow(string label, IReadOnlyList<string> keys)
     {
         internal readonly string Label = label;
@@ -330,6 +386,6 @@ internal static class KeyHintsUpdateShieldOnlyPatch
 {
     private static void Postfix(KeyHints __instance)
     {
-        ShieldOnlyKeyHintSystem.UpdateKeyHint(__instance);
+        ShieldOnlyKeyHintSystem.UpdateKeyHint(__instance, force: true);
     }
 }

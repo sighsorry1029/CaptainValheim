@@ -21,7 +21,7 @@ internal static class SecondaryAttackWorldApplySystem
 
         SecondaryAttackWorldApplyContributors.BeforeDefinitions(objectDb, compiledSnapshot, emitMissingWarnings);
         SecondaryAttackManager.ResetWorldApplyTransientState();
-        SecondaryAttackDefinitionBuildContext buildContext = new(objectDb, compiledSnapshot.Effects, emitMissingWarnings);
+        SecondaryAttackDefinitionBuildContext buildContext = new(objectDb, emitMissingWarnings);
 
         Dictionary<string, SecondaryAttackDefinition> appliedDefinitions = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> seenConfiguredPrefabs = new(StringComparer.OrdinalIgnoreCase);

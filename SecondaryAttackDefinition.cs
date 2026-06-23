@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace CaptainValheim;
 
 internal sealed class SecondaryAttackDefinition
@@ -40,8 +38,6 @@ internal sealed class SecondaryAttackDefinition
 
     public float RawReloadEitr { get; set; }
 
-    public List<ConfiguredWeaponEffectDefinition> ConfiguredEffects { get; set; } = new();
-
     public bool ShieldProjectileReflect { get; set; }
 
     public float ShieldProjectileReflectStaminaFactor { get; set; } = 1f;
@@ -55,8 +51,4 @@ internal sealed class SecondaryAttackDefinition
     public float? ShieldBlockChargeDecayTime { get; set; }
 
     public float? ShieldBlockChargeBlockingDecayFactor { get; set; }
-}
-
-internal sealed class ConfiguredWeaponEffectDefinition
-{
 }

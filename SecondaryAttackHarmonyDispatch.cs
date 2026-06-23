@@ -47,17 +47,4 @@ internal static class SecondaryAttackHarmonyDispatch
             ShieldOnlyKeyHintSystem.RefreshKeyHintUi();
         }
     }
-
-    internal static void PlayerUpdatePlacementGhostPostfix(Player player)
-    {
-    }
-
-    internal static bool PlayerTryPlacePiecePrefix(Player player, Piece piece, ref bool result)
-    {
-        return true;
-    }
-
-    internal static void PlayerTryPlacePiecePostfix(Player player, Piece piece, bool result)
-    {
-    }
 }

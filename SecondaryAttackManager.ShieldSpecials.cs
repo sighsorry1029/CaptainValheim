@@ -1,10 +1,10 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace CaptainValheim;
 
 internal static partial class SecondaryAttackManager
 {
+    // Public compatibility bridge for external integrations. Internal runtime code should call ShieldRuntimeSystem directly.
     public static bool CanStartShieldCharge(Humanoid humanoid, SecondaryAttackDefinition? definition = null)
     {
         return ShieldRuntimeSystem.CanStartShieldCharge(humanoid, definition);
@@ -49,7 +49,6 @@ internal static partial class SecondaryAttackManager
         string prefabName,
         ItemDrop.ItemData.SharedData sharedData,
         NormalizedWeaponConfig weaponConfig,
-        List<ConfiguredWeaponEffectDefinition> configuredEffects,
         out SecondaryAttackDefinition? definition)
     {
         definition = null;
@@ -104,8 +103,7 @@ internal static partial class SecondaryAttackManager
             ShieldBlockCharge = GetNormalizedShieldBlockChargeEnabled(weaponConfig),
             ShieldBlockChargeCount = GetNormalizedShieldBlockChargeCount(weaponConfig),
             ShieldBlockChargeDecayTime = GetNormalizedShieldBlockChargeDecayTime(weaponConfig),
-            ShieldBlockChargeBlockingDecayFactor = GetNormalizedShieldBlockChargeBlockingDecayFactor(weaponConfig),
-            ConfiguredEffects = configuredEffects
+            ShieldBlockChargeBlockingDecayFactor = GetNormalizedShieldBlockChargeBlockingDecayFactor(weaponConfig)
         };
         ApplyAttackResourceScaling(definition, sourceAttack, 1f);
         return true;

@@ -27,10 +27,10 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     public static readonly ManualLogSource ModLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
     internal static readonly ConfigSync ConfigSync = new(ModGUID) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion };
     internal static PluginSettings Settings { get; } = new();
-    internal static ConfigEntry<Toggle> ShieldDebugLogging => Settings.Debug.ShieldDebugLogging;
     private FileSystemWatcher? _watcher;
     private readonly object _reloadLock = new();
     private DateTime _lastConfigReloadTime;
+    private string? _lastConfigFileText;
     private bool _suppressWorldApplySettingChange;
     private const long RELOAD_DELAY = 10000000; // One second
 
@@ -54,6 +54,7 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         SetupWatcher();
 
         Config.Save();
+        _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
         if (saveOnSet)
         {
             Config.SaveOnConfigSet = saveOnSet;
@@ -98,7 +99,12 @@ public class CaptainValheimPlugin : BaseUnityPlugin
 
             try
             {
-                ModLogger.LogDebug("Reloading configuration...");
+                string configFileText = File.ReadAllText(ConfigFileFullPath);
+                if (string.Equals(_lastConfigFileText, configFileText, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
                 _suppressWorldApplySettingChange = true;
                 try
                 {
@@ -110,6 +116,7 @@ public class CaptainValheimPlugin : BaseUnityPlugin
                 }
 
                 SecondaryAttackFacade.RequestCurrentWorldReapply();
+                _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
                 ModLogger.LogInfo("Configuration reload complete.");
             }
             catch (Exception ex)
@@ -119,6 +126,11 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         }
 
         _lastConfigReloadTime = now;
+    }
+
+    private static string? ReadFileTextIfExists(string path)
+    {
+        return File.Exists(path) ? File.ReadAllText(path) : null;
     }
 
     private void SaveWithRespectToConfigSet(bool reload = false)
@@ -183,12 +195,9 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     {
         internal GeneralSettings General { get; } = new();
 
-        internal DebugSettings Debug { get; } = new();
-
         internal void Bind(CaptainValheimPlugin plugin)
         {
             General.Bind(plugin);
-            Debug.Bind(plugin);
         }
     }
 
@@ -202,18 +211,6 @@ public class CaptainValheimPlugin : BaseUnityPlugin
             LockConfiguration = plugin.config(group, "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
         }
     }
-
-    internal sealed class DebugSettings
-    {
-        internal ConfigEntry<Toggle> ShieldDebugLogging = null!;
-
-        internal void Bind(CaptainValheimPlugin plugin)
-        {
-            const string group = "2 - Debug";
-            ShieldDebugLogging = plugin.config(group, "Enable Shield Debug Logging", Toggle.Off, "If on, client-side shield throw/charge debug logs are printed to LogOutput.log.", synchronizedSetting: false);
-        }
-    }
-
 
     #region ConfigOptions
 

@@ -28,7 +28,7 @@ Global:
     enabled: true
     animation: battleaxe_attack1
     damageFactor: 0.8
-    pushFactor: 3.0
+    pushFactor: 1.0
     durabilityFactor: 2.0
     staminaFactor: 2.0
     ttlFactor: 1.0
@@ -40,7 +40,7 @@ Global:
     cooldown: 10.0
     cooldownReductionFactor: 0.5
     damageFactor: 1.0
-    pushFactor: 6.0
+    pushFactor: 2.0
     durabilityFactor: 1.0
     staminaFactor: 2.0
     distance: 4.0

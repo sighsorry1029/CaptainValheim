@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace CaptainValheim;
@@ -19,13 +18,12 @@ internal static partial class SecondaryAttackDefinitionCompiler
             return false;
         }
 
-        List<ConfiguredWeaponEffectDefinition> configuredEffects = new();
-        DefinitionFeatures features = AnalyzeDefinitionFeatures(weaponConfig, configuredEffects);
+        DefinitionFeatures features = AnalyzeDefinitionFeatures(weaponConfig);
         DefinitionValidationResult validation = ValidateDefinitionRequest(prefabName, sharedData, weaponConfig, features);
         switch (validation.Disposition)
         {
             case DefinitionValidationDisposition.EffectOnly:
-                definition = SecondaryAttackManager.CreateEffectOnlyDefinition(prefabName, weaponConfig, configuredEffects);
+                definition = SecondaryAttackManager.CreateEffectOnlyDefinition(prefabName, weaponConfig);
                 return true;
             case DefinitionValidationDisposition.Skip:
                 return false;
@@ -36,7 +34,6 @@ internal static partial class SecondaryAttackDefinitionCompiler
                     sharedData,
                     validation.PrimaryAttack ?? new Attack(),
                     weaponConfig,
-                    configuredEffects,
                     features,
                     out definition);
         }

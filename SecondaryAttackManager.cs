@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using BepInEx;
 using HarmonyLib;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -13,41 +12,20 @@ namespace CaptainValheim;
 
 internal static partial class SecondaryAttackManager
 {
-    private const string ShieldsYamlFileName = "CaptainValheim.yml";
-    private const string SyncedShieldsYamlIdentifier = "captain_valheim_yaml";
-    private const long ReloadDelayTicks = TimeSpan.TicksPerSecond;
-
-    private static readonly string ConfigDirectoryPath = Paths.ConfigPath;
-    private static readonly string ShieldsYamlFilePath = Path.Combine(ConfigDirectoryPath, ShieldsYamlFileName);
     private static readonly ConditionalWeakTable<Character, AsyncSecondaryActivityState> AsyncSecondaryActivityStates = new();
     private static readonly MethodInfo MemberwiseCloneMethod = AccessTools.Method(typeof(object), "MemberwiseClone")!;
     private static int AimRayMask;
     private static int ShieldChargeCollisionMask;
     private static int ShieldChargeImpactMask;
 
-    internal static string ConfigDirectoryPathForFacade => ConfigDirectoryPath;
+    internal const bool ShouldLogShieldDebug = false;
 
-    internal static string ShieldsYamlFilePathForFacade => ShieldsYamlFilePath;
-
-    internal static string ShieldsYamlFileNameForLoader => ShieldsYamlFileName;
-
-    internal static string SyncedShieldsYamlIdentifierForFacade => SyncedShieldsYamlIdentifier;
-
-    internal static long ReloadDelayTicksForFacade => ReloadDelayTicks;
-
-    internal static string GetDefaultShieldsYamlContents()
-    {
-        return SecondaryAttackDefaultYamlResources.Load(ShieldsYamlFileName);
-    }
-
+    [Conditional("CAPTAINVALHEIM_DEBUG_LOGGING")]
     internal static void LogShieldDebug(string message)
     {
-        if (CaptainValheimPlugin.ShieldDebugLogging?.Value.IsOn() == true)
-        {
-            CaptainValheimPlugin.ModLogger.LogInfo(message);
-        }
     }
 
+    // Public compatibility bridge for external integrations. Internal runtime code should call SecondaryAttackRuntimeFacade directly.
     public static bool TryGetDefinition(ItemDrop.ItemData weapon, out SecondaryAttackDefinition definition)
     {
         return SecondaryAttackRuntimeFacade.TryGetDefinition(weapon, out definition);
@@ -71,10 +49,6 @@ internal static partial class SecondaryAttackManager
     public static bool TryHandleCustomAttackTrigger(Attack attack)
     {
         return SecondaryAttackRuntimeFacade.TryHandleCustomAttackTrigger(attack);
-    }
-
-    internal static void RefreshLocalPlayerRuntimeWeaponDefinitions()
-    {
     }
 
     internal static void ResetWorldApplyTransientState()
@@ -466,5 +440,20 @@ internal static partial class SecondaryAttackManager
     private sealed class AsyncSecondaryActivityState
     {
         public int ActiveCount { get; set; }
+    }
+}
+
+internal static class ShieldPerformanceLog
+{
+    internal const bool Enabled = false;
+
+    internal static Stopwatch? Start()
+    {
+        return null;
+    }
+
+    [Conditional("CAPTAINVALHEIM_PERF_LOGGING")]
+    internal static void Stop(Stopwatch? stopwatch, string scope, Func<string> details)
+    {
     }
 }

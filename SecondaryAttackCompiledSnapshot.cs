@@ -20,8 +20,6 @@ internal sealed class SecondaryAttackCompiledSnapshot
     public IReadOnlyDictionary<string, NormalizedWeaponConfig> Weapons => Config.Weapons;
 
     public NormalizedWeaponConfig? GlobalShieldFallback => Config.GlobalShieldFallback;
-
-    public IReadOnlyDictionary<string, EffectBehaviorConfig> Effects => Config.Effects;
 }
 
 internal sealed class SecondaryAttackAppliedWorldSnapshot
@@ -46,6 +44,4 @@ internal sealed class SecondaryAttackAppliedWorldSnapshot
     public int ApplyRevision { get; }
 
     public IReadOnlyDictionary<string, SecondaryAttackDefinition> DefinitionsByPrefabName { get; }
-
-    public IReadOnlyDictionary<string, EffectBehaviorConfig> Effects => CompiledSnapshot.Effects;
 }

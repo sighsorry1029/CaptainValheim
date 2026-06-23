@@ -10,46 +10,21 @@ namespace CaptainValheim;
 
 internal sealed class KeyHintCell
 {
-    private readonly bool _hideOnRestore;
     private readonly List<TMP_Text> _keys = [];
     private readonly List<GameObject> _keyParents = [];
     private readonly List<TMP_Text> _extraTexts = [];
-    private readonly List<string> _originalKeyTexts = [];
-    private readonly List<bool> _originalKeyParentStates = [];
-    private readonly List<bool> _originalExtraTextStates = [];
-    private readonly HashSet<GameObject> _generatedKeyParents = [];
     private readonly List<TMP_Text> _generatedSeparatorTexts = [];
     private TMP_Text? _label;
-    private bool _capturedOriginals;
-    private bool _originalRootActive;
-    private string _originalLabel = string.Empty;
-    private float? _originalLabelPreferredWidth;
 
-    private KeyHintCell(GameObject root, bool hideOnRestore)
+    private KeyHintCell(GameObject root)
     {
         Root = root;
-        _hideOnRestore = hideOnRestore;
         RefreshChildren();
     }
 
     internal GameObject Root { get; }
 
-    internal bool IsValid => Root != null && (_label != null || _keys.Count > 0 || _extraTexts.Count > 0);
-
-    internal static KeyHintCell? Resolve(Transform owner, string transformPath)
-    {
-        Transform transform = owner.Find(transformPath);
-        return transform != null && IsUsableTemplate(transform.gameObject)
-            ? new KeyHintCell(transform.gameObject, hideOnRestore: false)
-            : null;
-    }
-
-    internal static KeyHintCell? CloneFrom(KeyHintCell? template, string name, bool hideOnRestore)
-    {
-        return CloneFrom(template?.Root, name, hideOnRestore);
-    }
-
-    internal static KeyHintCell? CloneFrom(GameObject? template, string name, bool hideOnRestore)
+    internal static KeyHintCell? CloneFrom(GameObject? template, string name)
     {
         if (!IsUsableTemplate(template) || template!.transform.parent == null)
         {
@@ -59,12 +34,7 @@ internal sealed class KeyHintCell
         GameObject clone = Object.Instantiate(template, template.transform.parent, false);
         clone.name = name;
         clone.SetActive(false);
-        return new KeyHintCell(clone, hideOnRestore);
-    }
-
-    internal static KeyHintCell? FromGameObject(GameObject? root, bool hideOnRestore = false)
-    {
-        return IsUsableTemplate(root) ? new KeyHintCell(root!, hideOnRestore) : null;
+        return new KeyHintCell(clone);
     }
 
     internal static bool IsUsableTemplate(GameObject? template)
@@ -93,7 +63,6 @@ internal sealed class KeyHintCell
     internal void Set(string label, IReadOnlyList<string> keys, float preferredTextWidth = 0f, bool hideExtraTexts = false)
     {
         EnsureKeyCount(keys.Count);
-        CaptureOriginals();
         Root.SetActive(true);
 
         if (_label != null)
@@ -158,142 +127,6 @@ internal sealed class KeyHintCell
         }
     }
 
-    internal void SetKeys(IReadOnlyList<string> keys, bool hideExtraTexts = false)
-    {
-        EnsureKeyCount(keys.Count);
-        CaptureOriginals();
-        Root.SetActive(true);
-
-        for (int i = 0; i < _keys.Count; i++)
-        {
-            bool show = i < keys.Count;
-            if (i < _keyParents.Count && _keyParents[i] != null)
-            {
-                _keyParents[i].SetActive(show);
-            }
-
-            if (show)
-            {
-                SetText(_keys[i], keys[i]);
-            }
-        }
-
-        if (hideExtraTexts)
-        {
-            foreach (TMP_Text extraText in _extraTexts)
-            {
-                if (extraText != null)
-                {
-                    extraText.gameObject.SetActive(false);
-                }
-            }
-        }
-        else
-        {
-            EnsureSeparatorCount(Mathf.Max(0, keys.Count - 1));
-            for (int i = 0; i < _generatedSeparatorTexts.Count; i++)
-            {
-                TMP_Text separator = _generatedSeparatorTexts[i];
-                if (separator == null)
-                {
-                    continue;
-                }
-
-                bool show = i < keys.Count - 1;
-                separator.gameObject.SetActive(show);
-                if (show)
-                {
-                    SetText(separator, "+");
-                }
-            }
-
-            foreach (TMP_Text extraText in _extraTexts)
-            {
-                if (extraText != null)
-                {
-                    extraText.gameObject.SetActive(keys.Count > 1);
-                }
-            }
-        }
-    }
-
-    internal void SetText(string value)
-    {
-        CaptureOriginals();
-        Root.SetActive(true);
-        TMP_Text? target = _label ?? _keys.FirstOrDefault() ?? _extraTexts.FirstOrDefault();
-        SetText(target, value);
-        foreach (GameObject keyParent in _keyParents)
-        {
-            if (keyParent != null)
-            {
-                keyParent.SetActive(false);
-            }
-        }
-
-        foreach (TMP_Text extraText in _extraTexts)
-        {
-            if (extraText != null && extraText != target)
-            {
-                extraText.gameObject.SetActive(false);
-            }
-        }
-    }
-
-    internal void Restore()
-    {
-        if (!_capturedOriginals)
-        {
-            if (_hideOnRestore)
-            {
-                Root.SetActive(false);
-            }
-
-            return;
-        }
-
-        Root.SetActive(_hideOnRestore ? false : _originalRootActive);
-        if (_label != null)
-        {
-            SetText(_label, _originalLabel);
-            if (_originalLabelPreferredWidth.HasValue &&
-                _label.TryGetComponent(out LayoutElement layoutElement))
-            {
-                layoutElement.preferredWidth = _originalLabelPreferredWidth.Value;
-            }
-        }
-
-        for (int i = 0; i < _keys.Count && i < _originalKeyTexts.Count; i++)
-        {
-            SetText(_keys[i], _originalKeyTexts[i]);
-        }
-
-        for (int i = 0; i < _keyParents.Count && i < _originalKeyParentStates.Count; i++)
-        {
-            if (_keyParents[i] != null)
-            {
-                bool active = !_generatedKeyParents.Contains(_keyParents[i]) && _originalKeyParentStates[i];
-                _keyParents[i].SetActive(active);
-            }
-        }
-
-        for (int i = 0; i < _extraTexts.Count && i < _originalExtraTextStates.Count; i++)
-        {
-            if (_extraTexts[i] != null)
-            {
-                _extraTexts[i].gameObject.SetActive(_originalExtraTextStates[i]);
-            }
-        }
-
-        foreach (TMP_Text separator in _generatedSeparatorTexts)
-        {
-            if (separator != null)
-            {
-                separator.gameObject.SetActive(false);
-            }
-        }
-    }
-
     internal void SetActive(bool active)
     {
         if (Root != null)
@@ -321,66 +154,11 @@ internal sealed class KeyHintCell
         }
     }
 
-    internal void MoveToEnd()
-    {
-        if (Root != null)
-        {
-            Root.transform.SetAsLastSibling();
-        }
-    }
-
-    internal void MoveToStart()
-    {
-        if (Root != null)
-        {
-            Root.transform.SetAsFirstSibling();
-        }
-    }
-
-    internal bool Contains(TMP_Text? text)
-    {
-        return text != null && Root != null && text.transform.IsChildOf(Root.transform);
-    }
-
     internal void RebuildParentLayout()
     {
         if (Root != null && Root.transform.parent is RectTransform parent)
         {
             LayoutRebuilder.ForceRebuildLayoutImmediate(parent);
-        }
-    }
-
-    private void CaptureOriginals()
-    {
-        if (_capturedOriginals)
-        {
-            return;
-        }
-
-        _capturedOriginals = true;
-        _originalRootActive = Root.activeSelf;
-        _originalLabel = _label != null ? _label.text : string.Empty;
-        _originalLabelPreferredWidth = _label != null &&
-                                       _label.TryGetComponent(out LayoutElement layoutElement)
-            ? layoutElement.preferredWidth
-            : null;
-
-        _originalKeyTexts.Clear();
-        foreach (TMP_Text key in _keys)
-        {
-            _originalKeyTexts.Add(key != null ? key.text : string.Empty);
-        }
-
-        _originalKeyParentStates.Clear();
-        foreach (GameObject keyParent in _keyParents)
-        {
-            _originalKeyParentStates.Add(keyParent != null && keyParent.activeSelf);
-        }
-
-        _originalExtraTextStates.Clear();
-        foreach (TMP_Text extraText in _extraTexts)
-        {
-            _originalExtraTextStates.Add(extraText != null && extraText.gameObject.activeSelf);
         }
     }
 
@@ -398,7 +176,6 @@ internal sealed class KeyHintCell
         {
             GameObject clone = Object.Instantiate(template, parent, false);
             clone.name = _keys.Count == 1 ? "key_bkg (1)" : $"key_bkg ({_keys.Count})";
-            _generatedKeyParents.Add(clone);
             RefreshChildren();
             if (_keys.Count == 0)
             {

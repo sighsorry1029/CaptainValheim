@@ -32,7 +32,7 @@ internal sealed class NormalizedShieldThrowConfig
 
     public float DamageFactor { get; set; } = 0.8f;
 
-    public float PushFactor { get; set; } = 3f;
+    public float PushFactor { get; set; } = 1f;
 
     public float StaminaFactor { get; set; } = 2f;
 
@@ -53,7 +53,7 @@ internal sealed class NormalizedShieldChargeConfig
 {
     public float DamageFactor { get; set; } = 1.2f;
 
-    public float PushFactor { get; set; } = 6f;
+    public float PushFactor { get; set; } = 2f;
 
     public float StaminaFactor { get; set; } = 3f;
 

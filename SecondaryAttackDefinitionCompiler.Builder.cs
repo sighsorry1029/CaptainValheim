@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-
 namespace CaptainValheim;
 
 internal static partial class SecondaryAttackDefinitionCompiler
@@ -29,9 +27,7 @@ internal static partial class SecondaryAttackDefinitionCompiler
         public bool WantsSecondaryOverride => UsesShieldSpecials;
     }
 
-    private static DefinitionFeatures AnalyzeDefinitionFeatures(
-        NormalizedWeaponConfig weaponConfig,
-        List<ConfiguredWeaponEffectDefinition> configuredEffects)
+    private static DefinitionFeatures AnalyzeDefinitionFeatures(NormalizedWeaponConfig weaponConfig)
     {
         bool hasShieldConfig = weaponConfig.Shield != null;
         bool usesShieldSpecials = weaponConfig.Shield?.PrimaryAttack != null ||
@@ -53,7 +49,6 @@ internal static partial class SecondaryAttackDefinitionCompiler
         ItemDrop.ItemData.SharedData sharedData,
         Attack primaryAttack,
         NormalizedWeaponConfig weaponConfig,
-        List<ConfiguredWeaponEffectDefinition> configuredEffects,
         DefinitionFeatures features,
         out SecondaryAttackDefinition? definition)
     {
@@ -61,12 +56,12 @@ internal static partial class SecondaryAttackDefinitionCompiler
 
         if (features.UsesShieldSpecials)
         {
-            return SecondaryAttackManager.TryCreateShieldSpecialDefinition(prefabName, sharedData, weaponConfig, configuredEffects, out definition);
+            return SecondaryAttackManager.TryCreateShieldSpecialDefinition(prefabName, sharedData, weaponConfig, out definition);
         }
 
         if (features.UsesShieldReflect || features.UsesShieldBlockCharge)
         {
-            definition = SecondaryAttackManager.CreateEffectOnlyDefinition(prefabName, weaponConfig, configuredEffects);
+            definition = SecondaryAttackManager.CreateEffectOnlyDefinition(prefabName, weaponConfig);
             return true;
         }
 

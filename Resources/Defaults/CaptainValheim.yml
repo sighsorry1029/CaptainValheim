@@ -7,13 +7,13 @@ Global:
     enabled: true
     durabilityFactor: 1.00 # Primary attack durability cost = shield useDurabilityDrain * durabilityFactor
     staminaFactor: 0.80     # Primary attack rawStamina = sqrt(baseBlockPower) * staminaFactor
-    pushFactor: 1.00        # Primary attack push = deflectionForce * pushFactor
+    pushFactor: 0.40        # Primary attack push = deflectionForce * pushFactor
     damageFactor: 0.40      # Primary attack damage = blockPower * damageFactor
   throw:
     enabled: true
     durabilityFactor: 1.00 # Throw durability cost = shield useDurabilityDrain * durabilityFactor
     staminaFactor: 2.00     # Throw rawStamina = sqrt(baseBlockPower) * staminaFactor
-    pushFactor: 3.00        # Throw push = deflectionForce * pushFactor
+    pushFactor: 1.00        # Throw push = deflectionForce * pushFactor
     damageFactor: 0.80      # Throw damage = blockPower * damageFactor
     targets: 3              # Max enemy hits, including the first enemy hit.
     damageDecay: 0.50       # nextDamage *= (1 - damageDecay)
@@ -25,7 +25,7 @@ Global:
     cooldownReductionFactor: 0.50 # cooldown *= 1 - BlockingSkill / 100 * cooldownReductionFactor
     durabilityFactor: 2.00 # Charge durability cost = shield useDurabilityDrain * durabilityFactor
     staminaFactor: 3.00     # Charge rawStamina = sqrt(baseBlockPower) * staminaFactor
-    pushFactor: 6.00        # Charge push = deflectionForce * pushFactor
+    pushFactor: 2.00        # Charge push = deflectionForce * pushFactor
     damageFactor: 1.20      # Charge damage = blockPower * damageFactor
     distance: 4.0           # Charge travel distance
     speed: 12.0             # Charge travel speed
@@ -51,3 +51,51 @@ ShieldWoodTower:
   #   chargeCount: 5
   #   decayTime: 4.0
   #   blockingDecayFactor: 0.5
+
+# Additional prefab override examples:
+#
+# ShieldBronzeBuckler:
+#   primaryAttack:
+#     damageFactor: 0.35
+#     pushFactor: 0.30
+#   throw:
+#     targets: 1
+#     damageFactor: 0.70
+#     staminaFactor: 1.50
+#   blockCharge:
+#     enabled: true
+#     chargeCount: 3
+#     decayTime: 1.0
+#     blockingDecayFactor: 0.25
+#
+# ShieldIronTower:
+#   throw:
+#     enabled: false
+#   charge:
+#     cooldown: 12.0
+#     staminaFactor: 3.50
+#     distance: 3.0
+#     speed: 9.0
+#     hitRadiusFactor: 0.55
+#
+# ShieldSerpentscale:
+#   reflect:
+#     enabled: true
+#     staminaFactor: 1.50
+#     reflectionFactor: 0.015
+#   throw:
+#     targets: 2
+#     damageDecay: 0.35
+#
+# ShieldCarapaceBuckler:
+#   primaryAttack:
+#     damageFactor: 0.55
+#     pushFactor: 0.50
+#   throw:
+#     damageFactor: 1.00
+#     targets: 2
+#     radiusFactor: 5.00
+#   charge:
+#     cooldown: 8.0
+#     distance: 4.5
+#     speed: 14.0

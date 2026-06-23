@@ -13,14 +13,6 @@ internal static class SecondaryAttackAdrenalineSystem
 
     private static readonly ConditionalWeakTable<Attack, AttackAdrenalineState> AttackStates = new();
 
-    internal static void BeginConfiguredSecondaryStart(Humanoid humanoid, ItemDrop.ItemData weapon)
-    {
-    }
-
-    internal static void EndConfiguredSecondaryStart(Humanoid humanoid)
-    {
-    }
-
     internal static void Reset(Attack attack)
     {
         if (attack != null)

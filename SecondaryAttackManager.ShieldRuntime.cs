@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -11,6 +12,7 @@ internal static partial class ShieldRuntimeSystem
 {
     private const float ShieldChargeStartVfxForwardOffset = 0f;
     private const float ShieldChargeStartVfxYOffset = 0.5f;
+    private static readonly List<Renderer> ShieldProjectileRendererBuffer = new();
 
     private static void StartShieldThrow(Attack attack, SecondaryAttackDefinition definition)
     {
@@ -103,8 +105,6 @@ internal static partial class ShieldRuntimeSystem
 
         PlayShieldThrowChargeStartSfx(attack);
         PlayShieldChargeStartVfx(attack);
-        SecondaryAttackManager.LogShieldDebug(
-            $"Starting shield charge for '{attack.m_weapon?.m_dropPrefab?.name ?? "<unknown>"}': distance={distance:0.###}, speed={(behavior.ShieldChargeSpeed > 0f ? behavior.ShieldChargeSpeed : Mathf.Max(10f, distance / 0.35f)):0.###}, damage={damage:0.###}, push={pushForce:0.###}, hitRadius={hitRadius:0.###}, staminaCost={staminaCost:0.###}, blocking={(attack.m_character as Player)?.IsBlocking() ?? false}.");
         GameObject controllerObject = new("CaptainValheim_ShieldCharge");
         ShieldChargeController controller = controllerObject.AddComponent<ShieldChargeController>();
         controller.Initialize(
@@ -159,24 +159,18 @@ internal static partial class ShieldRuntimeSystem
             Vector3 rayOrigin = GameCamera.instance.transform.position;
             Vector3 rayDirection = GameCamera.instance.transform.forward;
             float rayDistance = Mathf.Max(32f, maxTravelDistance * 3f);
-            RaycastHit[] hits = Physics.RaycastAll(rayOrigin, rayDirection, rayDistance, SecondaryAttackManager.GetAimRayMask());
-            Array.Sort(hits, (left, right) => left.distance.CompareTo(right.distance));
-            foreach (RaycastHit hit in hits)
+            int hitCount = Physics.RaycastNonAlloc(rayOrigin, rayDirection, AimRayHits, rayDistance, SecondaryAttackManager.GetAimRayMask());
+            if (TryResolveNearestPlayerAimHit(player, spawnPoint, AimRayHits, hitCount, out Vector3 aimedDirection))
             {
-                if (hit.collider.attachedRigidbody != null && hit.collider.attachedRigidbody.gameObject == player.gameObject)
-                {
-                    continue;
-                }
+                ClearAimRayHits(hitCount);
+                return aimedDirection;
+            }
 
-                Character? hitCharacter = SecondaryAttackManager.GetHitCharacter(hit.collider);
-                Vector3 targetPoint = hitCharacter != null && hitCharacter != player
-                    ? hitCharacter.GetCenterPoint()
-                    : hit.point;
-                Vector3 aimedDirection = targetPoint - spawnPoint;
-                if (aimedDirection.sqrMagnitude > 0.001f)
-                {
-                    return aimedDirection.normalized;
-                }
+            ClearAimRayHits(hitCount);
+            if (hitCount >= AimRayHits.Length &&
+                TryResolveNearestPlayerAimHit(player, spawnPoint, Physics.RaycastAll(rayOrigin, rayDirection, rayDistance, SecondaryAttackManager.GetAimRayMask()), out aimedDirection))
+            {
+                return aimedDirection;
             }
 
             if (rayDirection.sqrMagnitude > 0.001f)
@@ -191,6 +185,61 @@ internal static partial class ShieldRuntimeSystem
         }
 
         return player.transform.forward;
+    }
+
+    private static bool TryResolveNearestPlayerAimHit(
+        Player player,
+        Vector3 spawnPoint,
+        RaycastHit[] hits,
+        out Vector3 aimedDirection)
+    {
+        return TryResolveNearestPlayerAimHit(player, spawnPoint, hits, hits.Length, out aimedDirection);
+    }
+
+    private static bool TryResolveNearestPlayerAimHit(
+        Player player,
+        Vector3 spawnPoint,
+        RaycastHit[] hits,
+        int hitCount,
+        out Vector3 aimedDirection)
+    {
+        aimedDirection = Vector3.zero;
+        float nearestDistance = float.MaxValue;
+        int count = Mathf.Min(hitCount, hits.Length);
+        for (int index = 0; index < count; index++)
+        {
+            RaycastHit hit = hits[index];
+            if (hit.collider == null ||
+                hit.collider.attachedRigidbody != null && hit.collider.attachedRigidbody.gameObject == player.gameObject ||
+                hit.distance >= nearestDistance)
+            {
+                continue;
+            }
+
+            Character? hitCharacter = SecondaryAttackManager.GetHitCharacter(hit.collider);
+            Vector3 targetPoint = hitCharacter != null && hitCharacter != player
+                ? hitCharacter.GetCenterPoint()
+                : hit.point;
+            Vector3 candidateDirection = targetPoint - spawnPoint;
+            if (candidateDirection.sqrMagnitude <= 0.001f)
+            {
+                continue;
+            }
+
+            nearestDistance = hit.distance;
+            aimedDirection = candidateDirection.normalized;
+        }
+
+        return nearestDistance < float.MaxValue;
+    }
+
+    private static void ClearAimRayHits(int hitCount)
+    {
+        int count = Mathf.Min(hitCount, AimRayHits.Length);
+        for (int index = 0; index < count; index++)
+        {
+            AimRayHits[index] = default;
+        }
     }
 
     private static float CalculateShieldThrowSearchRadius(float deflectionForce, float radiusFactor)
@@ -318,7 +367,10 @@ internal static partial class ShieldRuntimeSystem
         hitTargets.Add(target);
         HitData hitData = CreateShieldHitData(attack, direction, hitPoint, damage, pushForce);
         hitData.m_hitCollider = FindBestHitCollider(target, hitPoint, hitRadius);
-        target.Damage(hitData);
+        using (ShieldWarfareHitContext.Begin(attack))
+        {
+            target.Damage(hitData);
+        }
         if (BaseAI.IsEnemy(attack.m_character, target))
         {
             float adrenalineFactor = SecondaryAttackRuntimeContext.TryGetActiveAttack(attack, out ActiveSecondaryAttack? activeAttack) && activeAttack != null
@@ -353,62 +405,70 @@ internal static partial class ShieldRuntimeSystem
             ShieldChargeImpactHits,
             SecondaryAttackManager.GetShieldChargeImpactMask(),
             QueryTriggerInteraction.Ignore);
-        HashSet<IDestructible> impactedTargets = new();
-        List<ShieldImpactTarget> impactTargets = new();
-        for (int index = 0; index < hitCount; index++)
+
+        try
         {
-            Collider collider = ShieldChargeImpactHits[index];
-            if (collider == null)
+            for (int index = 0; index < hitCount; index++)
             {
-                continue;
-            }
-
-            IDestructible? destructible = ResolveShieldImpactTarget(collider);
-            if (destructible == null || !impactedTargets.Add(destructible))
-            {
-                continue;
-            }
-
-            if (destructible is not MonoBehaviour)
-            {
-                continue;
-            }
-
-            impactTargets.Add(new ShieldImpactTarget(destructible, collider));
-        }
-
-        bool hitAny = false;
-        int validTargetCount = impactTargets.Count;
-        float damageScale = 1f;
-        if (applyLowerDamagePerHit && validTargetCount > 1)
-        {
-            damageScale = 1f / (validTargetCount * 0.75f);
-        }
-
-        SecondaryAttackManager.LogShieldDebug(
-            $"Shield impact targets={validTargetCount}, lowerDamage={applyLowerDamagePerHit}, damageScale={damageScale:0.###}, damage={damage:0.###}, scaledDamage={(damage * damageScale):0.###}, push={pushForce:0.###}, scaledPush={(pushForce * damageScale):0.###}.");
-
-        foreach (ShieldImpactTarget target in impactTargets)
-        {
-            float scaledDamage = damage * damageScale;
-            float scaledPushForce = pushForce * damageScale;
-            if (target.Destructible is Character candidate)
-            {
-                if (TryApplyShieldHit(attack, candidate, direction, impactPoint, scaledDamage, scaledPushForce, impactRadius, hitTargets, ref skillRaised))
+                Collider collider = ShieldChargeImpactHits[index];
+                ShieldChargeImpactHits[index] = null!;
+                if (collider == null)
                 {
-                    hitAny = true;
+                    continue;
                 }
 
-                continue;
+                IDestructible? destructible = ResolveShieldImpactTarget(collider);
+                if (destructible == null || !ShieldChargeImpactedTargets.Add(destructible))
+                {
+                    continue;
+                }
+
+                if (destructible is not MonoBehaviour)
+                {
+                    continue;
+                }
+
+                ShieldChargeImpactTargets.Add(new ShieldImpactTarget(destructible, collider));
             }
 
-            HitData hitData = CreateShieldHitData(attack, direction, impactPoint, scaledDamage, scaledPushForce);
-            hitData.m_hitCollider = target.Collider;
-            target.Destructible.Damage(hitData);
-            hitAny = true;
-        }
+            bool hitAny = false;
+            int validTargetCount = ShieldChargeImpactTargets.Count;
+            float damageScale = 1f;
+            if (applyLowerDamagePerHit && validTargetCount > 1)
+            {
+                damageScale = 1f / (validTargetCount * 0.75f);
+            }
 
-        return hitAny;
+            foreach (ShieldImpactTarget target in ShieldChargeImpactTargets)
+            {
+                float scaledDamage = damage * damageScale;
+                float scaledPushForce = pushForce * damageScale;
+                if (target.Destructible is Character candidate)
+                {
+                    if (TryApplyShieldHit(attack, candidate, direction, impactPoint, scaledDamage, scaledPushForce, impactRadius, hitTargets, ref skillRaised))
+                    {
+                        hitAny = true;
+                    }
+
+                    continue;
+                }
+
+                HitData hitData = CreateShieldHitData(attack, direction, impactPoint, scaledDamage, scaledPushForce);
+                hitData.m_hitCollider = target.Collider;
+                using (ShieldWarfareHitContext.Begin(attack))
+                {
+                    target.Destructible.Damage(hitData);
+                }
+                hitAny = true;
+            }
+
+            return hitAny;
+        }
+        finally
+        {
+            ShieldChargeImpactedTargets.Clear();
+            ShieldChargeImpactTargets.Clear();
+        }
     }
 
     private static bool CanShieldAttackHitCharacter(Attack attack, Character target)
@@ -481,11 +541,12 @@ internal static partial class ShieldRuntimeSystem
 
     private static Collider? FindBestHitCollider(Character target, Vector3 point, float radius)
     {
-        Collider[] colliders = target.GetComponentsInChildren<Collider>();
+        ShieldChargeTargetColliders.Clear();
+        target.GetComponentsInChildren(includeInactive: false, ShieldChargeTargetColliders);
         Collider? bestCollider = null;
         float bestDistance = float.MaxValue;
         float radiusSquared = radius * radius;
-        foreach (Collider collider in colliders)
+        foreach (Collider collider in ShieldChargeTargetColliders)
         {
             if (collider == null || !collider.enabled)
             {
@@ -503,6 +564,7 @@ internal static partial class ShieldRuntimeSystem
             bestCollider = collider;
         }
 
+        ShieldChargeTargetColliders.Clear();
         return bestCollider;
     }
 
@@ -531,34 +593,141 @@ internal static partial class ShieldRuntimeSystem
         impactProgress = 0f;
         impactPoint = end;
         float closestProgress = float.MaxValue;
-        Character owner = attack.m_character;
+        float scanRadius = (end - start).magnitude * 0.5f + hitRadius;
+        if (scanRadius <= 0f)
+        {
+            return false;
+        }
+
+        Vector3 scanCenter = (start + end) * 0.5f;
+        int hitCount = Physics.OverlapSphereNonAlloc(
+            scanCenter,
+            scanRadius,
+            ShieldChargeScanHits,
+            SecondaryAttackManager.GetShieldChargeImpactMask(),
+            QueryTriggerInteraction.Ignore);
+
+        if (hitCount >= ShieldChargeScanHits.Length)
+        {
+            ClearShieldChargeScanHits(hitCount);
+            return TryFindShieldChargeImpactByAllCharacters(
+                attack,
+                start,
+                end,
+                hitRadius,
+                hitTargets,
+                ref impactTarget,
+                ref impactProgress,
+                ref impactPoint,
+                ref closestProgress);
+        }
+
+        try
+        {
+            for (int index = 0; index < hitCount; index++)
+            {
+                Collider collider = ShieldChargeScanHits[index];
+                ShieldChargeScanHits[index] = null!;
+                Character? candidate = collider != null ? SecondaryAttackManager.GetHitCharacter(collider) : null;
+                if (candidate == null || !ShieldChargeScanCandidates.Add(candidate))
+                {
+                    continue;
+                }
+
+                TryConsiderShieldChargeImpactCandidate(
+                    attack,
+                    candidate,
+                    start,
+                    end,
+                    hitRadius,
+                    hitTargets,
+                    ref impactTarget,
+                    ref impactProgress,
+                    ref impactPoint,
+                    ref closestProgress);
+            }
+
+            return impactTarget != null;
+        }
+        finally
+        {
+            ShieldChargeScanCandidates.Clear();
+        }
+    }
+
+    private static bool TryFindShieldChargeImpactByAllCharacters(
+        Attack attack,
+        Vector3 start,
+        Vector3 end,
+        float hitRadius,
+        HashSet<Character> hitTargets,
+        ref Character? impactTarget,
+        ref float impactProgress,
+        ref Vector3 impactPoint,
+        ref float closestProgress)
+    {
         foreach (Character candidate in Character.GetAllCharacters())
         {
-            if (candidate == null || candidate == owner || candidate.IsDead() || hitTargets.Contains(candidate))
-            {
-                continue;
-            }
-
-            if (!CanShieldAttackHitCharacter(attack, candidate))
-            {
-                continue;
-            }
-
-            Vector3 targetPoint = candidate.GetCenterPoint();
-            float progress = SecondaryAttackManager.ClosestSegmentProgress(start, end, targetPoint);
-            Vector3 closestPoint = Vector3.Lerp(start, end, progress);
-            if ((targetPoint - closestPoint).sqrMagnitude > hitRadius * hitRadius || progress >= closestProgress)
-            {
-                continue;
-            }
-
-            closestProgress = progress;
-            impactTarget = candidate;
-            impactProgress = progress;
-            impactPoint = closestPoint;
+            TryConsiderShieldChargeImpactCandidate(
+                attack,
+                candidate,
+                start,
+                end,
+                hitRadius,
+                hitTargets,
+                ref impactTarget,
+                ref impactProgress,
+                ref impactPoint,
+                ref closestProgress);
         }
 
         return impactTarget != null;
+    }
+
+    private static void TryConsiderShieldChargeImpactCandidate(
+        Attack attack,
+        Character? candidate,
+        Vector3 start,
+        Vector3 end,
+        float hitRadius,
+        HashSet<Character> hitTargets,
+        ref Character? impactTarget,
+        ref float impactProgress,
+        ref Vector3 impactPoint,
+        ref float closestProgress)
+    {
+        Character owner = attack.m_character;
+        if (candidate == null || candidate == owner || candidate.IsDead() || hitTargets.Contains(candidate))
+        {
+            return;
+        }
+
+        if (!CanShieldAttackHitCharacter(attack, candidate))
+        {
+            return;
+        }
+
+        Vector3 targetPoint = candidate.GetCenterPoint();
+        float progress = SecondaryAttackManager.ClosestSegmentProgress(start, end, targetPoint);
+        Vector3 closestPoint = Vector3.Lerp(start, end, progress);
+        if ((targetPoint - closestPoint).sqrMagnitude > hitRadius * hitRadius || progress >= closestProgress)
+        {
+            return;
+        }
+
+        closestProgress = progress;
+        impactTarget = candidate;
+        impactProgress = progress;
+        impactPoint = closestPoint;
+    }
+
+    private static void ClearShieldChargeScanHits(int hitCount)
+    {
+        int count = Mathf.Min(hitCount, ShieldChargeScanHits.Length);
+        for (int index = 0; index < count; index++)
+        {
+            ShieldChargeScanHits[index] = null!;
+        }
     }
 
     private static Character? FindShieldBounceTarget(Character owner, Character currentTarget, float searchRadius, HashSet<Character> hitTargets)
@@ -569,7 +738,7 @@ internal static partial class ShieldRuntimeSystem
     private static Character? FindShieldBounceTarget(Character owner, Vector3 origin, Character? currentTarget, float searchRadius, HashSet<Character> hitTargets)
     {
         Character? nextTarget = null;
-        float closestDistance = searchRadius;
+        float closestDistanceSqr = searchRadius * searchRadius;
         foreach (Character candidate in Character.GetAllCharacters())
         {
             if (candidate == null || candidate == owner || candidate == currentTarget || candidate.IsDead() || hitTargets.Contains(candidate))
@@ -582,13 +751,13 @@ internal static partial class ShieldRuntimeSystem
                 continue;
             }
 
-            float distance = Vector3.Distance(origin, candidate.GetCenterPoint());
-            if (distance > closestDistance)
+            float distanceSqr = (origin - candidate.GetCenterPoint()).sqrMagnitude;
+            if (distanceSqr > closestDistanceSqr)
             {
                 continue;
             }
 
-            closestDistance = distance;
+            closestDistanceSqr = distanceSqr;
             nextTarget = candidate;
         }
 
@@ -780,48 +949,125 @@ internal static partial class ShieldRuntimeSystem
         bool allowSkillRaise = true,
         bool returningToOwner = false)
     {
-        if (!launchData.IsValid)
+        Stopwatch? totalPerf = ShieldPerformanceLog.Start();
+        string result = "completed";
+        string shieldName = "<null>";
+        GameObject? projectileObject = null;
+        Projectile? projectile = null;
+        try
         {
-            return false;
-        }
+            if (thrownShield == null)
+            {
+                result = "missingShield";
+                return false;
+            }
 
-        if (direction.sqrMagnitude < 0.001f)
+            shieldName = thrownShield.m_dropPrefab?.name ?? "<null>";
+            if (!launchData.IsValid)
+            {
+                result = "invalidLaunchData";
+                return false;
+            }
+
+            if (direction.sqrMagnitude < 0.001f)
+            {
+                direction = SecondaryAttackManager.GetSentinelForward(attack.m_character);
+            }
+
+            direction.Normalize();
+            Stopwatch? stepPerf = ShieldPerformanceLog.Start();
+            projectileObject = Object.Instantiate(launchData.ProjectilePrefab!, spawnPoint, Quaternion.LookRotation(direction));
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.spawn.instantiate",
+                () => $"shield={shieldName} projectilePrefab={launchData.ProjectilePrefab!.name} object={projectileObject.name} returning={returningToOwner}");
+
+            stepPerf = ShieldPerformanceLog.Start();
+            projectile = projectileObject.GetComponent<Projectile>();
+            IProjectile? projectileInterface = projectileObject.GetComponent<IProjectile>();
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.spawn.getComponents",
+                () => $"shield={shieldName} object={projectileObject.name} projectile={projectile != null} interface={projectileInterface != null}");
+            if (projectile == null || projectileInterface == null)
+            {
+                result = "missingProjectileComponents";
+                SecondaryAttackManager.DestroyProjectileObject(projectileObject);
+                return false;
+            }
+
+            stepPerf = ShieldPerformanceLog.Start();
+            ConfigureShieldProjectileInstance(projectile, thrownShield, ttl);
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.configure",
+                () => $"shield={shieldName} projectile={projectile.name} ttl={ttl:0.###}");
+
+            stepPerf = ShieldPerformanceLog.Start();
+            HitData hitData = CreateShieldHitData(attack, direction, spawnPoint, damage, pushForce);
+            if (returningToOwner)
+            {
+                hitData.m_statusEffectHash = 0;
+            }
+
+            if (!allowSkillRaise || returningToOwner)
+            {
+                hitData.m_skillRaiseAmount = 0f;
+            }
+
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.hitData",
+                () => $"shield={shieldName} projectile={projectile.name} damage={hitData.m_damage.GetTotalDamage():0.###} push={hitData.m_pushForce:0.###} allowSkillRaise={allowSkillRaise} returning={returningToOwner}");
+
+            projectile.m_adrenaline = 0f;
+            stepPerf = ShieldPerformanceLog.Start();
+            projectileInterface.Setup(attack.m_character, direction * speed, launchData.AttackHitNoise, hitData, thrownShield, null);
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.projectileSetup",
+                () => $"shield={shieldName} projectile={projectile.name} speed={speed:0.###} hitNoise={launchData.AttackHitNoise:0.###}");
+            projectile.m_adrenaline = 0f;
+
+            stepPerf = ShieldPerformanceLog.Start();
+            IgnoreShieldProjectileOwnerCollisions(projectileObject, attack.m_character);
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.ownerCollisionIgnore",
+                () => $"shield={shieldName} projectile={projectile.name} owner={attack.m_character?.name ?? "<null>"}");
+
+            stepPerf = ShieldPerformanceLog.Start();
+            SecondaryAttackManager.RegisterProjectileAttackAttribution(projectile, attack);
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.attribution",
+                () => $"shield={shieldName} projectile={projectile.name}");
+
+            stepPerf = ShieldPerformanceLog.Start();
+            ApplyShieldProjectileVisual(projectile, thrownShield);
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.visualTotal",
+                () => $"shield={shieldName} projectile={projectile.name} visualObject={projectile.m_visual?.name ?? "<null>"}");
+
+            stepPerf = ShieldPerformanceLog.Start();
+            ShieldProjectileController controller = projectileObject.AddComponent<ShieldProjectileController>();
+            controller.Initialize(attack, projectile, thrownShield, remainingChains, searchRadius, speed, ttl, damageDecay, hitTargets, returningToOwner);
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.controller",
+                () => $"shield={shieldName} projectile={projectile.name} chains={remainingChains} returning={returningToOwner}");
+
+            attack.m_weapon.m_lastProjectile = projectileObject;
+            return true;
+        }
+        finally
         {
-            direction = SecondaryAttackManager.GetSentinelForward(attack.m_character);
+            ShieldPerformanceLog.Stop(
+                totalPerf,
+                "shieldThrow.spawn",
+                () => $"shield={shieldName} result={result} projectile={projectile?.name ?? projectileObject?.name ?? "<null>"} returning={returningToOwner} chains={remainingChains} speed={speed:0.###} ttl={ttl:0.###}");
         }
-
-        direction.Normalize();
-        GameObject projectileObject = Object.Instantiate(launchData.ProjectilePrefab!, spawnPoint, Quaternion.LookRotation(direction));
-        Projectile? projectile = projectileObject.GetComponent<Projectile>();
-        IProjectile? projectileInterface = projectileObject.GetComponent<IProjectile>();
-        if (projectile == null || projectileInterface == null)
-        {
-            SecondaryAttackManager.DestroyProjectileObject(projectileObject);
-            return false;
-        }
-
-        ConfigureShieldProjectileInstance(projectile, thrownShield, ttl);
-        HitData hitData = CreateShieldHitData(attack, direction, spawnPoint, damage, pushForce);
-        if (returningToOwner)
-        {
-            hitData.m_statusEffectHash = 0;
-        }
-
-        if (!allowSkillRaise || returningToOwner)
-        {
-            hitData.m_skillRaiseAmount = 0f;
-        }
-
-        projectile.m_adrenaline = 0f;
-        projectileInterface.Setup(attack.m_character, direction * speed, launchData.AttackHitNoise, hitData, thrownShield, null);
-        projectile.m_adrenaline = 0f;
-        IgnoreShieldProjectileOwnerCollisions(projectileObject, attack.m_character);
-        SecondaryAttackManager.RegisterProjectileAttackAttribution(projectile, attack);
-        ApplyShieldProjectileVisual(projectile, thrownShield);
-        ShieldProjectileController controller = projectileObject.AddComponent<ShieldProjectileController>();
-        controller.Initialize(attack, projectile, thrownShield, remainingChains, searchRadius, speed, ttl, damageDecay, hitTargets, returningToOwner);
-        attack.m_weapon.m_lastProjectile = projectileObject;
-        return true;
     }
 
     private static void IgnoreShieldProjectileOwnerCollisions(GameObject projectileObject, Character? owner)
@@ -911,7 +1157,17 @@ internal static partial class ShieldRuntimeSystem
             return;
         }
 
-        ThrowProjectileVisualSpin.Ensure(projectile.m_visual, ThrowProjectileVisualSpin.AxisMode.WorldUp);
+        EnsureShieldThrowVisualSpin(projectile.m_visual);
+    }
+
+    private static void EnsureShieldThrowVisualSpin(GameObject? visual)
+    {
+        if (ThrowProjectileVisualSpin.IsConfigured(visual, ThrowProjectileVisualSpin.AxisMode.WorldUp))
+        {
+            return;
+        }
+
+        ThrowProjectileVisualSpin.Ensure(visual, ThrowProjectileVisualSpin.AxisMode.WorldUp);
     }
 
     private static void MarkShieldProjectile(Projectile projectile)
@@ -941,27 +1197,56 @@ internal static partial class ShieldRuntimeSystem
 
     private static void PrepareShieldProjectileForVisualSwap(Projectile projectile)
     {
+        Stopwatch? stepPerf = ShieldPerformanceLog.Start();
         Transform? existingVisualRoot = projectile.transform.Find(ShieldThrowProjectileVisualRootName);
+        ShieldPerformanceLog.Stop(
+            stepPerf,
+            "shieldThrow.visual.prepare.findRoot",
+            () => $"projectile={projectile.name} found={existingVisualRoot != null}");
         if (existingVisualRoot != null)
         {
             projectile.m_visual = existingVisualRoot.gameObject;
             projectile.m_canChangeVisuals = true;
-            ThrowProjectileVisualSpin.Ensure(projectile.m_visual, ThrowProjectileVisualSpin.AxisMode.WorldUp);
+            stepPerf = ShieldPerformanceLog.Start();
+            EnsureShieldThrowVisualSpin(projectile.m_visual);
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.visual.prepare.reuseSpin",
+                () => $"projectile={projectile.name} visualObject={projectile.m_visual.name}");
             return;
         }
 
+        stepPerf = ShieldPerformanceLog.Start();
         HideShieldProjectileSourcePresentation(projectile);
+        ShieldPerformanceLog.Stop(
+            stepPerf,
+            "shieldThrow.visual.prepare.hideSource",
+            () => $"projectile={projectile.name}");
+
+        stepPerf = ShieldPerformanceLog.Start();
         GameObject visualRoot = new(ShieldThrowProjectileVisualRootName);
         visualRoot.transform.SetParent(projectile.transform, false);
         visualRoot.layer = projectile.gameObject.layer;
         projectile.m_visual = visualRoot;
         projectile.m_canChangeVisuals = true;
-        ThrowProjectileVisualSpin.Ensure(projectile.m_visual, ThrowProjectileVisualSpin.AxisMode.WorldUp);
+        ShieldPerformanceLog.Stop(
+            stepPerf,
+            "shieldThrow.visual.prepare.createRoot",
+            () => $"projectile={projectile.name} visualObject={visualRoot.name}");
+
+        stepPerf = ShieldPerformanceLog.Start();
+        EnsureShieldThrowVisualSpin(projectile.m_visual);
+        ShieldPerformanceLog.Stop(
+            stepPerf,
+            "shieldThrow.visual.prepare.initialSpin",
+            () => $"projectile={projectile.name} visualObject={projectile.m_visual.name}");
     }
 
     private static void HideShieldProjectileSourcePresentation(Projectile projectile)
     {
-        foreach (Renderer renderer in projectile.GetComponentsInChildren<Renderer>(true))
+        ShieldProjectileRendererBuffer.Clear();
+        projectile.GetComponentsInChildren(includeInactive: true, ShieldProjectileRendererBuffer);
+        foreach (Renderer renderer in ShieldProjectileRendererBuffer)
         {
             if (renderer is TrailRenderer || renderer is ParticleSystemRenderer)
             {
@@ -970,6 +1255,8 @@ internal static partial class ShieldRuntimeSystem
 
             renderer.enabled = false;
         }
+
+        ShieldProjectileRendererBuffer.Clear();
     }
 
     private static void ApplyShieldProjectileVisual(Projectile projectile, ItemDrop.ItemData thrownShield)
@@ -979,39 +1266,134 @@ internal static partial class ShieldRuntimeSystem
             return;
         }
 
-        ZNetView? nview = projectile.GetComponent<ZNetView>();
-        if (projectile.m_canChangeVisuals && projectile.m_visual != null && nview != null && nview.IsValid())
+        Stopwatch? totalPerf = ShieldPerformanceLog.Start();
+        string shieldName = thrownShield.m_dropPrefab.name;
+        string path = "none";
+        try
         {
-            nview.GetZDO().Set(ZDOVars.s_visual, thrownShield.m_dropPrefab.name);
-            projectile.UpdateVisual();
-            ThrowProjectileVisualSpin.Ensure(projectile.m_visual, ThrowProjectileVisualSpin.AxisMode.WorldUp);
-            return;
+            Stopwatch? stepPerf = ShieldPerformanceLog.Start();
+            ZNetView? nview = projectile.GetComponent<ZNetView>();
+            bool nviewValid = nview != null && nview.IsValid();
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.visual.getZNetView",
+                () => $"shield={shieldName} projectile={projectile.name} valid={nviewValid}");
+
+            if (projectile.m_canChangeVisuals && projectile.m_visual != null && nviewValid)
+            {
+                path = "updateVisual";
+                stepPerf = ShieldPerformanceLog.Start();
+                nview!.GetZDO().Set(ZDOVars.s_visual, thrownShield.m_dropPrefab.name);
+                ShieldPerformanceLog.Stop(
+                    stepPerf,
+                    "shieldThrow.visual.zdoSet",
+                    () => $"shield={shieldName} projectile={projectile.name}");
+
+                stepPerf = ShieldPerformanceLog.Start();
+                projectile.UpdateVisual();
+                ShieldPerformanceLog.Stop(
+                    stepPerf,
+                    "shieldThrow.visual.updateVisual",
+                    () => $"shield={shieldName} projectile={projectile.name} changed={projectile.m_changedVisual} visualObject={projectile.m_visual?.name ?? "<null>"}");
+
+                stepPerf = ShieldPerformanceLog.Start();
+                EnsureShieldThrowVisualSpin(projectile.m_visual);
+                ShieldPerformanceLog.Stop(
+                    stepPerf,
+                    "shieldThrow.visual.spin",
+                    () => $"shield={shieldName} projectile={projectile.name} axis=WorldUp");
+                return;
+            }
+
+            path = "localFallback";
+            stepPerf = ShieldPerformanceLog.Start();
+            GameObject? attachPrefab = ResolveAttachGameObject(thrownShield.m_dropPrefab);
+
+            ShieldPerformanceLog.Stop(
+                stepPerf,
+                "shieldThrow.visual.fallback.resolveAttach",
+                () => $"shield={shieldName} projectile={projectile.name} attachPrefab={attachPrefab?.name ?? "<null>"}");
+
+            bool createdPrimitive = false;
+            if (attachPrefab == null)
+            {
+                stepPerf = ShieldPerformanceLog.Start();
+                attachPrefab = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                Object.Destroy(attachPrefab.GetComponent<Collider>());
+                attachPrefab.transform.localScale = new Vector3(0.6f, 0.08f, 0.6f);
+                createdPrimitive = true;
+                ShieldPerformanceLog.Stop(
+                    stepPerf,
+                    "shieldThrow.visual.fallback.createPrimitive",
+                    () => $"shield={shieldName} projectile={projectile.name}");
+            }
+
+            ApplyShieldProjectileCachedVisual(
+                projectile,
+                thrownShield,
+                attachPrefab,
+                shieldName,
+                createdPrimitive,
+                perfScopePrefix: "shieldThrow.visual.fallback");
+        }
+        finally
+        {
+            ShieldPerformanceLog.Stop(
+                totalPerf,
+                "shieldThrow.visual",
+                () => $"shield={shieldName} projectile={projectile.name} path={path} visualObject={projectile.m_visual?.name ?? "<null>"}");
+        }
+    }
+
+    private static GameObject? ResolveAttachGameObject(GameObject itemPrefab)
+    {
+        Transform? attach = itemPrefab != null ? itemPrefab.transform.Find("attach") : null;
+        if (attach == null)
+        {
+            return null;
         }
 
-        GameObject? attachPrefab = ItemStand.GetAttachPrefab(thrownShield.m_dropPrefab);
-        if (attachPrefab != null)
-        {
-            attachPrefab = ItemStand.GetAttachGameObject(attachPrefab);
-        }
+        Transform? attachObject = attach.Find("attachobj");
+        return attachObject != null ? attachObject.gameObject : attach.gameObject;
+    }
 
-        if (attachPrefab == null)
-        {
-            attachPrefab = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            Object.Destroy(attachPrefab.GetComponent<Collider>());
-            attachPrefab.transform.localScale = new Vector3(0.6f, 0.08f, 0.6f);
-        }
-
-        if (projectile.m_visual != null)
-        {
-            projectile.m_visual.SetActive(false);
-        }
-
-        GameObject visual = Object.Instantiate(attachPrefab, projectile.transform);
+    private static void ApplyShieldProjectileCachedVisual(
+        Projectile projectile,
+        ItemDrop.ItemData thrownShield,
+        GameObject attachPrefab,
+        string shieldName,
+        bool createdPrimitive,
+        string perfScopePrefix)
+    {
+        GameObject? previousVisual = projectile.m_visual;
+        Stopwatch? stepPerf = ShieldPerformanceLog.Start();
+        GameObject visual = Object.Instantiate(attachPrefab, projectile.transform, false);
+        visual.name = $"{attachPrefab.name}(ShieldProjectileVisual)";
+        ShieldPerformanceLog.Stop(
+            stepPerf,
+            $"{perfScopePrefix}.instantiate",
+            () => $"shield={shieldName} projectile={projectile.name} attachPrefab={attachPrefab.name} primitive={createdPrimitive}");
         visual.transform.localPosition = Vector3.zero;
         visual.transform.localRotation = Quaternion.identity;
+        if (previousVisual != null && previousVisual != visual)
+        {
+            previousVisual.SetActive(false);
+        }
+
+        stepPerf = ShieldPerformanceLog.Start();
         visual.GetComponentInChildren<IEquipmentVisual>()?.Setup(thrownShield.m_variant);
+        ShieldPerformanceLog.Stop(
+            stepPerf,
+            $"{perfScopePrefix}.equipmentSetup",
+            () => $"shield={shieldName} projectile={projectile.name} variant={thrownShield.m_variant}");
         projectile.m_visual = visual;
-        ThrowProjectileVisualSpin.Ensure(projectile.m_visual, ThrowProjectileVisualSpin.AxisMode.WorldUp);
+
+        stepPerf = ShieldPerformanceLog.Start();
+        EnsureShieldThrowVisualSpin(projectile.m_visual);
+        ShieldPerformanceLog.Stop(
+            stepPerf,
+            $"{perfScopePrefix}.spin",
+            () => $"shield={shieldName} projectile={projectile.name} axis=WorldUp");
     }
 
     private static void PlayShieldProjectileImpactSound(Vector3 position)
@@ -1106,9 +1488,20 @@ internal static partial class ShieldRuntimeSystem
 
     private static void DropThrownShield(ItemDrop.ItemData thrownShield, Vector3 position, Quaternion rotation)
     {
+        if (thrownShield == null)
+        {
+            return;
+        }
+
+        Stopwatch? perf = ShieldPerformanceLog.Start();
+        string shieldName = thrownShield.m_dropPrefab?.name ?? thrownShield.m_shared?.m_name ?? "<null>";
         thrownShield.m_equipped = false;
         ItemDrop droppedShield = ItemDrop.DropItem(thrownShield, 1, position + Vector3.up * 0.25f, rotation);
         MarkThrownShieldForAutoEquip(droppedShield);
+        ShieldPerformanceLog.Stop(
+            perf,
+            "shieldThrow.return.drop",
+            () => $"shield={shieldName} dropped={droppedShield != null} position={position}");
     }
 
     private static void MarkThrownShieldForAutoEquip(ItemDrop? itemDrop)
@@ -1151,6 +1544,17 @@ internal static partial class ShieldRuntimeSystem
         return shieldItem != null;
     }
 
+    private static Character? ResolveProjectileHitCharacter(Collider collider)
+    {
+        if (collider == null)
+        {
+            return null;
+        }
+
+        GameObject hitObject = Projectile.FindHitObject(collider);
+        return hitObject != null ? hitObject.GetComponent<Character>() : null;
+    }
+
     private static void RegisterShieldProjectileController(Projectile projectile, ShieldProjectileController controller)
     {
         ShieldProjectileControllers.Remove(projectile);
@@ -1171,35 +1575,6 @@ internal static partial class ShieldRuntimeSystem
 
         controller.HandleHit(collider, hitPoint, water, normal);
         return true;
-    }
-
-    private static void SetShieldChargeActive(Character character, bool active, float cooldown = 0f, ItemDrop.ItemData? shield = null)
-    {
-        if (character == null)
-        {
-            return;
-        }
-
-        ShieldChargeRuntimeState state = ShieldChargeRuntimeStates.GetValue(character, _ => new ShieldChargeRuntimeState());
-        state.Active = active;
-        if (!active && cooldown > 0f)
-        {
-            state.CooldownUntil = Mathf.Max(state.CooldownUntil, Time.time + cooldown);
-            state.ChargeCooldownDuration = cooldown;
-            state.ShieldIcon = ResolveShieldIcon(shield) ?? state.ShieldIcon;
-            ShieldChargeCooldownStatusSystem.Apply(character, shield, cooldown);
-        }
-    }
-
-    private static Character? ResolveProjectileHitCharacter(Collider collider)
-    {
-        if (collider == null)
-        {
-            return null;
-        }
-
-        GameObject hitObject = Projectile.FindHitObject(collider);
-        return hitObject != null ? hitObject.GetComponent<Character>() : null;
     }
 
     private sealed class ShieldProjectileController : MonoBehaviour
@@ -1303,6 +1678,22 @@ internal static partial class ShieldRuntimeSystem
             {
                 DestroyCurrentProjectile();
             }
+        }
+
+        public bool ShouldIgnoreHit(Collider collider)
+        {
+            Character? target = ResolveProjectileHitCharacter(collider);
+            if (target == _owner)
+            {
+                return true;
+            }
+
+            if (_returningToOwner)
+            {
+                return Time.time < _returnCollisionIgnoreUntil || target != null;
+            }
+
+            return target != null && _hitTargets.Contains(target);
         }
 
         private void OnProjectileHit(Collider collider, Vector3 hitPoint, bool water)
@@ -1469,7 +1860,10 @@ internal static partial class ShieldRuntimeSystem
             hitData.m_dir = ResolveProjectileHitDirection(hitPoint, normal);
             hitData.m_hitCollider = collider;
             hitData.SetAttacker(_attack.m_character);
-            destructible.Damage(hitData);
+            using (ShieldWarfareHitContext.Begin(_attack))
+            {
+                destructible.Damage(hitData);
+            }
             if (character != null &&
                 !_returningToOwner &&
                 _owner != null &&
@@ -1569,22 +1963,6 @@ internal static partial class ShieldRuntimeSystem
             }
         }
 
-        public bool ShouldIgnoreHit(Collider collider)
-        {
-            Character? target = ResolveProjectileHitCharacter(collider);
-            if (target == _owner)
-            {
-                return true;
-            }
-
-            if (_returningToOwner)
-            {
-                return Time.time < _returnCollisionIgnoreUntil || target != null;
-            }
-
-            return target != null && _hitTargets.Contains(target);
-        }
-
         private bool TryStartReturnToOwner(Vector3 hitPoint, Vector3 normal)
         {
             if (_attack?.m_character is not Humanoid owner || owner.IsDead() || _thrownShield == null)
@@ -1676,32 +2054,78 @@ internal static partial class ShieldRuntimeSystem
 
         private bool TryReturnShieldToOwner(Humanoid owner)
         {
+            Stopwatch? totalPerf = ShieldPerformanceLog.Start();
+            string result = "completed";
+            string shieldName = _thrownShield?.m_dropPrefab?.name ?? _thrownShield?.m_shared?.m_name ?? "<null>";
             Inventory? inventory = owner.GetInventory();
-            if (inventory == null || _thrownShield == null)
+            try
             {
-                return false;
-            }
+                if (inventory == null || _thrownShield == null)
+                {
+                    result = "missingInventoryOrShield";
+                    return false;
+                }
 
-            _thrownShield.m_equipped = false;
-            if (!inventory.CanAddItem(_thrownShield) || !inventory.AddItem(_thrownShield))
-            {
-                DropThrownShield(_thrownShield, _lastPosition, transform.rotation);
-                _dropped = true;
+                _thrownShield.m_equipped = false;
+                Stopwatch? stepPerf = ShieldPerformanceLog.Start();
+                bool canAdd = inventory.CanAddItem(_thrownShield);
+                ShieldPerformanceLog.Stop(
+                    stepPerf,
+                    "shieldThrow.return.canAdd",
+                    () => $"owner={owner.name} shield={shieldName} canAdd={canAdd}");
+                if (!canAdd)
+                {
+                    result = "dropNoInventorySpace";
+                    DropThrownShield(_thrownShield, _lastPosition, transform.rotation);
+                    _dropped = true;
+                    DestroyCurrentProjectile();
+                    return true;
+                }
+
+                stepPerf = ShieldPerformanceLog.Start();
+                bool added = inventory.AddItem(_thrownShield);
+                ShieldPerformanceLog.Stop(
+                    stepPerf,
+                    "shieldThrow.return.addItem",
+                    () => $"owner={owner.name} shield={shieldName} added={added}");
+                if (!added)
+                {
+                    result = "dropAddFailed";
+                    DropThrownShield(_thrownShield, _lastPosition, transform.rotation);
+                    _dropped = true;
+                    DestroyCurrentProjectile();
+                    return true;
+                }
+
+                _transferred = true;
+                stepPerf = ShieldPerformanceLog.Start();
+                EquipReturnedShieldNowOrLater(owner, _thrownShield);
+                ShieldPerformanceLog.Stop(
+                    stepPerf,
+                    "shieldThrow.return.equipDispatch",
+                    () => $"owner={owner.name} shield={shieldName} equipped={_thrownShield.m_equipped}");
                 DestroyCurrentProjectile();
                 return true;
             }
-
-            _transferred = true;
-            EquipReturnedShieldNowOrLater(owner, _thrownShield);
-            DestroyCurrentProjectile();
-            return true;
+            finally
+            {
+                ShieldPerformanceLog.Stop(
+                    totalPerf,
+                    "shieldThrow.return.total",
+                    () => $"owner={owner.name} shield={shieldName} result={result}");
+            }
         }
 
         private void DestroyCurrentProjectile()
         {
             if (_projectile != null)
             {
+                Stopwatch? perf = ShieldPerformanceLog.Start();
                 SecondaryAttackManager.DestroyProjectileObject(_projectile.gameObject);
+                ShieldPerformanceLog.Stop(
+                    perf,
+                    "shieldThrow.return.destroy",
+                    () => $"projectile={_projectile.name}");
             }
 
             enabled = false;
@@ -1711,6 +2135,24 @@ internal static partial class ShieldRuntimeSystem
         {
             ZNetView? nview = _projectile != null ? _projectile.GetComponent<ZNetView>() : GetComponent<ZNetView>();
             return nview == null || !nview.IsValid() || nview.IsOwner();
+        }
+    }
+
+    private static void SetShieldChargeActive(Character character, bool active, float cooldown = 0f, ItemDrop.ItemData? shield = null)
+    {
+        if (character == null)
+        {
+            return;
+        }
+
+        ShieldChargeRuntimeState state = ShieldChargeRuntimeStates.GetValue(character, _ => new ShieldChargeRuntimeState());
+        state.Active = active;
+        if (!active && cooldown > 0f)
+        {
+            state.CooldownUntil = Mathf.Max(state.CooldownUntil, Time.time + cooldown);
+            state.ChargeCooldownDuration = cooldown;
+            state.ShieldIcon = ResolveShieldIcon(shield) ?? state.ShieldIcon;
+            ShieldChargeCooldownStatusSystem.Apply(character, shield, cooldown);
         }
     }
 
@@ -1753,8 +2195,6 @@ internal static partial class ShieldRuntimeSystem
             _cooldown = Mathf.Max(0f, cooldown);
             _vfxForwardOffset = vfxForwardOffset;
             _vfxHeightOffset = vfxHeightOffset;
-            SecondaryAttackManager.LogShieldDebug(
-                $"Shield charge controller initialized: position={attack.m_character.transform.position}, direction={_direction}, remainingDistance={_remainingDistance:0.###}, speed={_speed:0.###}, collisionRadius={_collisionRadius:0.###}, hitHeightOffset={_hitHeightOffset:0.###}.");
         }
 
         private void FixedUpdate()
@@ -1795,8 +2235,6 @@ internal static partial class ShieldRuntimeSystem
             if (!_loggedFirstStep)
             {
                 _loggedFirstStep = true;
-                SecondaryAttackManager.LogShieldDebug(
-                    $"Shield charge first step: start={start}, requestedStep={stepDistance:0.###}, traveled={traveledDistance:0.###}, blocked={blocked}, impactFound={impactFound}, hitPointOffset={hitPointOffset.magnitude:0.###}, remainingBefore={_remainingDistance:0.###}.");
             }
 
             if (impactFound)
@@ -1832,8 +2270,6 @@ internal static partial class ShieldRuntimeSystem
 
             if (blocked || impactFound)
             {
-                SecondaryAttackManager.LogShieldDebug(
-                    $"Shield charge stopping: blocked={blocked}, impactFound={impactFound}, end={end}, remainingAfter={_remainingDistance:0.###}.");
                 StopChargeMotion();
                 Destroy(gameObject);
             }

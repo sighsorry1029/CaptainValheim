@@ -44,7 +44,7 @@ internal sealed class ProjectileAttackAttribution
     public bool DisableCurrentAttackFallback { get; }
 }
 
-internal sealed class ProjectileHitContext
+internal readonly struct ProjectileHitContext
 {
     public ProjectileHitContext(
         Projectile projectile,

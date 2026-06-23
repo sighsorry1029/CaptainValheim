@@ -35,7 +35,6 @@ internal static class SecondaryAttackNetworkCompat
     {
         private static void Prefix(ZNetPeer peer)
         {
-            CaptainValheimPlugin.ModLogger.LogDebug("Registering version RPC handler");
             peer.m_rpc.Register(VersionCheckRpcName, new Action<ZRpc, ZPackage>(HandleVersionCheck));
 
             CaptainValheimPlugin.ModLogger.LogInfo("Invoking version check");

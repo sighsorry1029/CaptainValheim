@@ -15,7 +15,7 @@ internal static class SecondaryAttackConfigLoader
 
     public static void EnsureLocalFilesExist()
     {
-        Directory.CreateDirectory(SecondaryAttackManager.ConfigDirectoryPathForFacade);
+        Directory.CreateDirectory(SecondaryAttackYamlDomainRegistry.ConfigDirectoryPath);
         foreach (SecondaryAttackYamlDomain domain in SecondaryAttackYamlDomainRegistry.Domains)
         {
             if (!File.Exists(domain.FilePath))

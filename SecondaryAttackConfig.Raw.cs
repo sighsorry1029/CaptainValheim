@@ -91,7 +91,3 @@ internal sealed class ShieldBlockChargeConfig
 
     public float? BlockingDecayFactor { get; set; }
 }
-
-internal sealed class EffectBehaviorConfig
-{
-}

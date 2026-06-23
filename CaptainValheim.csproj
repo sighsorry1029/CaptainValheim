@@ -500,6 +500,7 @@
         <Compile Include="SecondaryAttackWorldApplyContributors.cs" />
         <Compile Include="SecondaryAttackWorldApplySystem.cs" />
         <Compile Include="SecondaryAttackWarningLog.cs" />
+        <Compile Include="WarfareTweaksBridge.cs" />
         <Compile Include="ShieldAccess.cs" />
         <Compile Include="ShieldRuntimeSystem.cs" />
     </ItemGroup>
@@ -563,6 +564,7 @@
             <PackageVersion>$(Major).$(Minor).$(Patch)</PackageVersion>
             <VersionString>$(Major).$(Minor).$(Patch)</VersionString>
             <PackageDir>$(ProjectDir)\Thunderstore\$(PackageName)</PackageDir>
+            <NexusPackageDir>$(ProjectDir)\Nexus\$(PackageName)</NexusPackageDir>
         </PropertyGroup>
     </Target>
     <Target Name="CopyOutputDLL" AfterTargets="GetAssemblyVersion">
@@ -572,10 +574,10 @@
         <Copy SourceFiles="$(TargetDir)$(AssemblyName).dll" DestinationFolder="$(CopyOutputDLLPath3)" OverwriteReadOnlyFiles="true" Condition="Exists('$(CopyOutputDLLPath3)')"/>
     </Target>
     <Target Name="CopyReadMeToTSFolder" AfterTargets="CopyOutputDLL" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
-        <Warning Text="README.md not found in project directory. A default README.md file will be created for the Thunderstore package" Condition="!Exists('README.md')"/>
-        <WriteLinesToFile File="README.md" Lines="# CaptainValheim" Overwrite="false" Condition="!Exists('README.md')"/>
-        <Copy SourceFiles="README.md" DestinationFolder="$(PackageDir)" OverwriteReadOnlyFiles="true"/>
-        <Copy SourceFiles="README.md" DestinationFolder="$(ProjectDir)\Thunderstore" OverwriteReadOnlyFiles="true"/>
+        <Error Text="README.md not found in project directory." Condition="!Exists('$(ProjectDir)README.md')"/>
+        <RemoveDir Directories="$(PackageDir)" Condition="Exists('$(PackageDir)')"/>
+        <MakeDir Directories="$(PackageDir)"/>
+        <Copy SourceFiles="$(ProjectDir)README.md" DestinationFiles="$(PackageDir)\README.md" OverwriteReadOnlyFiles="true"/>
     </Target>
     <Target Name="UpdateManifestVersion" AfterTargets="CopyReadmeToTSFolder" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
         <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)Thunderstore\manifest.json')"/>
@@ -589,15 +591,16 @@
     <Target Name="MakeThunderstorePackage" AfterTargets="UpdateManifestVersion" Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
         <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)\Thunderstore\manifest.json')"/>
         <Error Text="icon.png not found in Thunderstore directory. Please note that Thunderstore requires this image to be 256x256 in dimension" Condition="!Exists('$(ProjectDir)\Thunderstore\icon.png')"/>
+        <Error Text="CHANGELOG.md not found in Thunderstore directory." Condition="!Exists('$(ProjectDir)\Thunderstore\CHANGELOG.md')"/>
+        <Error Text="README.md not found in temporary Thunderstore package directory." Condition="!Exists('$(PackageDir)\README.md')"/>
         <ItemGroup>
             <PackageFiles Include="$(TargetDir)$(AssemblyName).dll" Condition="Exists('$(TargetDir)$(AssemblyName).dll')"/>
             <PackageFiles Include="$(ProjectDir)\Thunderstore\CHANGELOG.md" Condition="Exists('$(ProjectDir)\Thunderstore\CHANGELOG.md')"/>
             <PackageFiles Include="$(ProjectDir)\Thunderstore\manifest.json" Condition="Exists('$(ProjectDir)\Thunderstore\manifest.json')"/>
             <PackageFiles Include="$(ProjectDir)\Thunderstore\icon.png" Condition="Exists('$(ProjectDir)\Thunderstore\icon.png')"/>
         </ItemGroup>
-        <MakeDir Directories="$(PackageDir)"/>
         <Copy SourceFiles="@(PackageFiles)" DestinationFolder="$(PackageDir)"/>
-        <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="Thunderstore\$(PackageName).zip" Overwrite="true"/>
+        <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="$(ProjectDir)Thunderstore\$(PackageName).zip" Overwrite="true"/>
         <RemoveDir Directories="$(PackageDir)"/>
     </Target>
     <Target Name="MakeNexusPackage" AfterTargets="MakeThunderstorePackage" Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
@@ -605,10 +608,11 @@
         <ItemGroup>
             <NexusPackageFiles Include="$(TargetDir)$(AssemblyName).dll;"/>
         </ItemGroup>
-        <MakeDir Directories="$(PackageDir)"/>
-        <Copy SourceFiles="@(NexusPackageFiles)" DestinationFolder="$(PackageDir)"/>
-        <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="Nexus\$(PackageName).zip" Overwrite="true"/>
-        <RemoveDir Directories="$(PackageDir)"/>
+        <RemoveDir Directories="$(NexusPackageDir)" Condition="Exists('$(NexusPackageDir)')"/>
+        <MakeDir Directories="$(NexusPackageDir)"/>
+        <Copy SourceFiles="@(NexusPackageFiles)" DestinationFolder="$(NexusPackageDir)"/>
+        <ZipDirectory SourceDirectory="$(NexusPackageDir)" DestinationFile="$(ProjectDir)Nexus\$(PackageName).zip" Overwrite="true"/>
+        <RemoveDir Directories="$(NexusPackageDir)"/>
     </Target>
 
 </Project>

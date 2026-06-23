@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace CaptainValheim;
@@ -42,8 +41,7 @@ internal static partial class SecondaryAttackManager
 
     internal static SecondaryAttackDefinition CreateEffectOnlyDefinition(
         string prefabName,
-        NormalizedWeaponConfig weaponConfig,
-        List<ConfiguredWeaponEffectDefinition> configuredEffects)
+        NormalizedWeaponConfig weaponConfig)
     {
         return new SecondaryAttackDefinition
         {
@@ -58,8 +56,7 @@ internal static partial class SecondaryAttackManager
             ShieldBlockCharge = GetNormalizedShieldBlockChargeEnabled(weaponConfig),
             ShieldBlockChargeCount = GetNormalizedShieldBlockChargeCount(weaponConfig),
             ShieldBlockChargeDecayTime = GetNormalizedShieldBlockChargeDecayTime(weaponConfig),
-            ShieldBlockChargeBlockingDecayFactor = GetNormalizedShieldBlockChargeBlockingDecayFactor(weaponConfig),
-            ConfiguredEffects = configuredEffects
+            ShieldBlockChargeBlockingDecayFactor = GetNormalizedShieldBlockChargeBlockingDecayFactor(weaponConfig)
         };
     }
 

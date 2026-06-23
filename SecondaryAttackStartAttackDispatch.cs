@@ -85,8 +85,6 @@ internal static class SecondaryAttackStartAttackDispatch
 
         if (mode == ShieldSpecialMode.Charge && !ShieldRuntimeSystem.CanStartShieldCharge(humanoid, definition))
         {
-            SecondaryAttackManager.LogShieldDebug(
-                $"Shield charge start blocked for '{shieldWeapon?.m_dropPrefab?.name ?? "<unknown>"}': currentAttack={(humanoid.m_currentAttack != null)}, activeCharge={ShieldRuntimeSystem.IsShieldChargeActiveForDebug(humanoid)}, chargeCooldownActive={ShieldRuntimeSystem.IsShieldChargeCooldownActiveForDebug(humanoid)}.");
             result = false;
             runOriginal = false;
             return true;
@@ -100,7 +98,6 @@ internal static class SecondaryAttackStartAttackDispatch
         }
 
         ShieldRuntimeSystem.BeginShieldSecondaryStart(humanoid, shieldWeapon, mode);
-        SecondaryAttackAdrenalineSystem.BeginConfiguredSecondaryStart(humanoid, shieldWeapon);
         return true;
     }
 }

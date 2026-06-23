@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using UnityEngine;
 using ProjectileLaunchData = CaptainValheim.ProjectileRuntimeSystem.ProjectileLaunchData;
@@ -40,6 +41,12 @@ internal static partial class ShieldRuntimeSystem
     private static readonly ConditionalWeakTable<Humanoid, ReturnedShieldEquipState> ReturnedShieldEquipStates = new();
     private static readonly List<ShieldPrimarySharedOverrideState> ShieldPrimarySharedOverrides = [];
     private static readonly Collider[] ShieldChargeImpactHits = new Collider[128];
+    private static readonly Collider[] ShieldChargeScanHits = new Collider[128];
+    private static readonly HashSet<IDestructible> ShieldChargeImpactedTargets = new();
+    private static readonly HashSet<Character> ShieldChargeScanCandidates = new();
+    private static readonly List<ShieldImpactTarget> ShieldChargeImpactTargets = [];
+    private static readonly List<Collider> ShieldChargeTargetColliders = [];
+    private static readonly RaycastHit[] AimRayHits = new RaycastHit[64];
     private static ProjectileLaunchData _shieldThrowTemplateLaunchData = ProjectileLaunchData.Invalid;
     private static string _shieldThrowTemplateSource = string.Empty;
 
@@ -90,13 +97,18 @@ internal static partial class ShieldRuntimeSystem
             return;
         }
 
-        if (Time.time < state.NextRetry)
+        if (Time.frameCount < state.NextRetryFrame || Time.time < state.NextRetry)
         {
             return;
         }
 
         state.NextRetry = Time.time + ShieldThrowReturnedShieldEquipRetryInterval;
+        Stopwatch? perf = ShieldPerformanceLog.Start();
         humanoid.EquipItem(state.Shield);
+        ShieldPerformanceLog.Stop(
+            perf,
+            "shieldThrow.return.equipRetry",
+            () => $"owner={humanoid.name} shield={state.Shield.m_dropPrefab?.name ?? state.Shield.m_shared?.m_name ?? "<null>"} equipped={state.Shield.m_equipped}");
         if (state.Shield.m_equipped)
         {
             ReturnedShieldEquipStates.Remove(humanoid);
@@ -111,13 +123,12 @@ internal static partial class ShieldRuntimeSystem
         }
 
         ReturnedShieldEquipStates.Remove(humanoid);
-        humanoid.EquipItem(shield);
-        if (shield.m_equipped)
-        {
-            return;
-        }
-
+        Stopwatch? perf = ShieldPerformanceLog.Start();
         ReturnedShieldEquipStates.Add(humanoid, new ReturnedShieldEquipState(shield));
+        ShieldPerformanceLog.Stop(
+            perf,
+            "shieldThrow.return.equipQueued",
+            () => $"owner={humanoid.name} shield={shield.m_dropPrefab?.name ?? shield.m_shared?.m_name ?? "<null>"} dueFrame={Time.frameCount + 1}");
     }
 
     internal static void BeginShieldPrimaryStart(Humanoid humanoid, ItemDrop.ItemData shieldWeapon)
@@ -223,23 +234,19 @@ internal static partial class ShieldRuntimeSystem
         bool canCharge = shieldBehavior.HasShieldCharge && shieldBehavior.ShieldChargeDistance > 0f;
         if (canCharge && player.IsBlocking())
         {
-            SecondaryAttackManager.LogShieldDebug("Shield special resolved to Charge: player is currently blocking.");
             return ShieldSpecialMode.Charge;
         }
 
         if (canThrow)
         {
-            SecondaryAttackManager.LogShieldDebug("Shield special resolved to Throw: player is not currently blocking and throw is configured.");
             return ShieldSpecialMode.Throw;
         }
 
         if (canCharge)
         {
-            SecondaryAttackManager.LogShieldDebug("Shield special resolved to Charge: throw is not configured.");
             return ShieldSpecialMode.Charge;
         }
 
-        SecondaryAttackManager.LogShieldDebug("Shield special resolved to Throw: no secondary shield mode is configured.");
         return ShieldSpecialMode.Throw;
     }
 
@@ -515,6 +522,7 @@ internal static partial class ShieldRuntimeSystem
             Shield = shield;
             RetryUntil = Time.time + ShieldThrowReturnedShieldEquipRetrySeconds;
             NextRetry = Time.time;
+            NextRetryFrame = Time.frameCount + 1;
         }
 
         public ItemDrop.ItemData Shield { get; }
@@ -522,6 +530,8 @@ internal static partial class ShieldRuntimeSystem
         public float RetryUntil { get; }
 
         public float NextRetry { get; set; }
+
+        public int NextRetryFrame { get; }
     }
 
     private readonly struct ShieldPrimarySharedOverrideState
