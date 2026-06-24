@@ -1,9 +1,9 @@
 {
   "name": "CaptainValheim",
   "version_number": "1.0.0",
-  "website_url": "https://discord.gg/pdHgy6Bsng",
-  "description": "Turns Valheim shields into active weapons with server-synced YAML for shield strikes, throws, charges, projectile reflection, and block charges, scaling damage, push, stamina, durability, cooldowns, and travel from real shield stats.",
+  "website_url": "https://discord.gg/jkcJCq2sK5",
+  "description": "Turns shields into active weapons. All you need is one shield. Shield strikes, throws, charges, projectile reflection, and block charges all follow real shield stats and blocking skill.",
   "dependencies": [
-    "denikson-BepInExPack_Valheim-5.4.2202"
+    "denikson-BepInExPack_Valheim-5.4.2333"
   ]
 }
