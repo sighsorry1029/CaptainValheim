@@ -80,3 +80,6 @@ Set a mode block's `enabled: false` to disable that feature after inheritance.
 - Works on dedicated servers through synced config.
 - Can pass shield hit context to WarfareTweaks so configured Warfare effects apply cleanly to shield attacks and shield charges.
 - Designed to coexist with SecondaryAttacks, which handles non-shield ranged, melee, bomb, staff, and Blood Magic behaviors.
+
+## Github
+https://github.com/sighsorry1029/CaptainValheim

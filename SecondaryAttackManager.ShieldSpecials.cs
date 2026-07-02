@@ -120,6 +120,7 @@ internal static partial class SecondaryAttackManager
         public ItemDrop.ItemData? Blocker { get; set; }
         public SecondaryAttackDefinition? Definition { get; set; }
         public ProjectileHitContext? ProjectileContext { get; set; }
+        public string ProjectileContextSource { get; set; } = string.Empty;
         public float PostResistanceBlockableDamage { get; set; }
         public float VanillaBlockStaminaCost { get; set; }
     }

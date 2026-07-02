@@ -192,7 +192,7 @@ internal sealed class KeyHintCell
         }
 
         Transform? parent = _keyParents[0].transform.parent;
-        TMP_Text? templateText = _label ?? _keys.FirstOrDefault();
+        TMP_Text? templateText = ResolveSeparatorTemplateText();
         if (parent == null || templateText == null)
         {
             return;
@@ -201,16 +201,13 @@ internal sealed class KeyHintCell
         while (_generatedSeparatorTexts.Count < count)
         {
             GameObject separatorObject = new($"CaptainValheim_KeyHintSeparator_{_generatedSeparatorTexts.Count}");
+            separatorObject.SetActive(false);
             separatorObject.transform.SetParent(parent, false);
             RectTransform rectTransform = separatorObject.AddComponent<RectTransform>();
             rectTransform.sizeDelta = new Vector2(18f, 24f);
 
             TextMeshProUGUI separator = separatorObject.AddComponent<TextMeshProUGUI>();
-            separator.font = templateText.font;
-            separator.fontSharedMaterial = templateText.fontSharedMaterial;
-            separator.fontSize = templateText.fontSize;
-            separator.fontStyle = templateText.fontStyle;
-            separator.color = templateText.color;
+            CopyTextStyle(templateText, separator);
             separator.alignment = TextAlignmentOptions.Center;
             separator.raycastTarget = false;
             separator.text = "+";
@@ -236,6 +233,40 @@ internal sealed class KeyHintCell
                 separator.transform.SetSiblingIndex(_keyParents[targetKeyIndex].transform.GetSiblingIndex());
             }
         }
+    }
+
+    private TMP_Text? ResolveSeparatorTemplateText()
+    {
+        return GetStyleTemplate(_label) ??
+               _keys.Select(GetStyleTemplate).FirstOrDefault(static text => text != null) ??
+               GetStyleTemplate(Root.GetComponentsInChildren<TMP_Text>(includeInactive: true)
+                   .FirstOrDefault(static text => text != null && text.font != null)) ??
+               _label ??
+               _keys.FirstOrDefault();
+    }
+
+    private static TMP_Text? GetStyleTemplate(TMP_Text? text)
+    {
+        return text != null && text.font != null ? text : null;
+    }
+
+    private static void CopyTextStyle(TMP_Text source, TMP_Text target)
+    {
+        target.font = source.font;
+        target.fontSharedMaterial = source.fontSharedMaterial;
+        target.fontSize = source.fontSize;
+        target.fontSizeMin = source.fontSizeMin;
+        target.fontSizeMax = source.fontSizeMax;
+        target.enableAutoSizing = source.enableAutoSizing;
+        target.fontStyle = source.fontStyle;
+        target.fontWeight = source.fontWeight;
+        target.color = source.color;
+        target.characterSpacing = source.characterSpacing;
+        target.wordSpacing = source.wordSpacing;
+        target.lineSpacing = source.lineSpacing;
+        target.paragraphSpacing = source.paragraphSpacing;
+        target.textWrappingMode = source.textWrappingMode;
+        target.overflowMode = source.overflowMode;
     }
 
     private void RefreshChildren()

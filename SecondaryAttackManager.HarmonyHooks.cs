@@ -3,6 +3,44 @@ using UnityEngine;
 
 namespace CaptainValheim;
 
+internal sealed class CaptainValheimCharacterRpc : MonoBehaviour
+{
+    private const string ShieldReflectRequestRpcName = "CaptainValheim_RequestShieldReflect";
+
+    private Character _character = null!;
+    private ZNetView? _nview;
+
+    private void Awake()
+    {
+        _character = GetComponent<Character>();
+        _nview = GetComponent<ZNetView>();
+        if (_nview == null || !_nview.IsValid())
+        {
+            return;
+        }
+
+        _nview.Register<ZDOID, Vector3, Vector3, bool>(ShieldReflectRequestRpcName, RPC_RequestShieldReflect);
+    }
+
+    internal static void SendShieldReflectRequest(ZNetView targetNView, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, bool water)
+    {
+        targetNView.InvokeRPC(ShieldReflectRequestRpcName, projectileId, hitPoint, normal, water);
+    }
+
+    private void RPC_RequestShieldReflect(long sender, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, bool water)
+    {
+        if (_character is not Player player || _nview == null || !_nview.IsValid() || !_nview.IsOwner())
+        {
+            SecondaryAttackManager.LogShieldReflectDebug(
+                "rpc.skip.notOwner",
+                () => $"rpc.skip reason=not-owner-or-not-player sender={sender} projectile={projectileId} frame={Time.frameCount}");
+            return;
+        }
+
+        SecondaryAttackManager.StorePendingShieldReflectContext(player, projectileId, hitPoint, normal, water);
+    }
+}
+
 [HarmonyPatch(typeof(Projectile), "UpdateVisual")]
 internal static class ProjectileUpdateVisualPatch
 {
@@ -42,6 +80,23 @@ internal static class ProjectileOnHitPatch
         SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
     {
         SecondaryAttackHarmonyDispatch.ProjectileOnHitPostfix(__instance, collider, hitPoint, water, normal, __state);
+    }
+}
+
+[HarmonyPatch(typeof(Character), "Awake")]
+internal static class CharacterAwakeCaptainValheimPatch
+{
+    private static void Postfix(Character __instance)
+    {
+        if (__instance.GetComponent<ZNetView>() == null)
+        {
+            return;
+        }
+
+        if (__instance.GetComponent<CaptainValheimCharacterRpc>() == null)
+        {
+            __instance.gameObject.AddComponent<CaptainValheimCharacterRpc>();
+        }
     }
 }
 
