@@ -19,15 +19,15 @@ internal sealed class CaptainValheimCharacterRpc : MonoBehaviour
             return;
         }
 
-        _nview.Register<ZDOID, Vector3, Vector3, bool>(ShieldReflectRequestRpcName, RPC_RequestShieldReflect);
+        _nview.Register<ZDOID, Vector3, Vector3, string>(ShieldReflectRequestRpcName, RPC_RequestShieldReflect);
     }
 
-    internal static void SendShieldReflectRequest(ZNetView targetNView, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, bool water)
+    internal static void SendShieldReflectRequest(ZNetView targetNView, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, string payload)
     {
-        targetNView.InvokeRPC(ShieldReflectRequestRpcName, projectileId, hitPoint, normal, water);
+        targetNView.InvokeRPC(ShieldReflectRequestRpcName, projectileId, hitPoint, normal, payload);
     }
 
-    private void RPC_RequestShieldReflect(long sender, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, bool water)
+    private void RPC_RequestShieldReflect(long sender, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, string payload)
     {
         if (_character is not Player player || _nview == null || !_nview.IsValid() || !_nview.IsOwner())
         {
@@ -37,7 +37,7 @@ internal sealed class CaptainValheimCharacterRpc : MonoBehaviour
             return;
         }
 
-        SecondaryAttackManager.StorePendingShieldReflectContext(player, projectileId, hitPoint, normal, water);
+        SecondaryAttackManager.StorePendingShieldReflectContext(player, projectileId, hitPoint, normal, payload);
     }
 }
 
