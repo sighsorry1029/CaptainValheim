@@ -9,10 +9,13 @@ namespace CaptainValheim;
 internal static partial class SecondaryAttackManager
 {
     private const float ShieldReflectPendingContextLifetime = 1f;
+    private const float ShieldReflectPendingBlockLifetime = 1f;
     private const float ShieldReflectPendingHitPointMaxDistanceSqr = 25f;
     private const int ShieldReflectMaxPendingContextsPerPlayer = 8;
+    private const int ShieldReflectMaxPendingBlocksPerPlayer = 8;
     private const float ShieldReflectDebugThrottleSeconds = 0.5f;
     private static readonly ConditionalWeakTable<Player, PendingShieldReflectState> ShieldReflectPendingContexts = new();
+    private static readonly ConditionalWeakTable<Player, PendingShieldReflectBlockState> ShieldReflectPendingBlocks = new();
     private static readonly Dictionary<string, float> ShieldReflectDebugNextLogTimes = new(StringComparer.Ordinal);
 
     // Public compatibility bridge for external integrations. Internal runtime code should call SecondaryAttackRuntimeFacade directly.
@@ -130,6 +133,11 @@ internal static partial class SecondaryAttackManager
         string source)
     {
         float now = GetNetworkTimeSeconds();
+        if (TryConsumePendingShieldReflectBlock(player, projectileId, context, source, now))
+        {
+            return;
+        }
+
         PendingShieldReflectState state = ShieldReflectPendingContexts.GetValue(player, _ => new PendingShieldReflectState());
         PruneExpiredShieldReflectContexts(state, now);
         while (state.Contexts.Count >= ShieldReflectMaxPendingContextsPerPlayer)
@@ -202,7 +210,7 @@ internal static partial class SecondaryAttackManager
 
     internal static void FinalizeBlockAttack(Humanoid humanoid, bool result, HitData hit, BlockAttackContext context)
     {
-        if (!result || context.Player == null || context.Blocker == null || context.Definition == null || !context.ProjectileContext.HasValue)
+        if (!result || context.Player == null || context.Blocker == null || context.Definition == null)
         {
             if (context.Player != null && context.Definition != null)
             {
@@ -214,7 +222,87 @@ internal static partial class SecondaryAttackManager
             return;
         }
 
+        if (!context.ProjectileContext.HasValue)
+        {
+            StorePendingShieldReflectBlock(context, hit);
+            return;
+        }
+
         ShieldReflectProjectileContext projectileContext = context.ProjectileContext.Value;
+        FinalizeShieldReflect(context.Player, context.Blocker, context.Definition, context.VanillaBlockStaminaCost, projectileContext, context.ProjectileContextSource);
+    }
+
+    private static void StorePendingShieldReflectBlock(BlockAttackContext context, HitData hit)
+    {
+        if (context.Player == null || context.Blocker == null || context.Definition == null)
+        {
+            return;
+        }
+
+        float now = GetNetworkTimeSeconds();
+        PendingShieldReflectBlockState state = ShieldReflectPendingBlocks.GetValue(context.Player, _ => new PendingShieldReflectBlockState());
+        PruneExpiredShieldReflectBlocks(state, now);
+        while (state.Blocks.Count >= ShieldReflectMaxPendingBlocksPerPlayer)
+        {
+            state.Blocks.RemoveAt(0);
+        }
+
+        state.Blocks.Add(new PendingShieldReflectBlock(
+            context.Blocker,
+            context.Definition,
+            hit.m_point,
+            context.VanillaBlockStaminaCost,
+            now + ShieldReflectPendingBlockLifetime));
+        LogShieldReflectDebug(
+            "block.pending",
+            () => $"block.pending reason=no-projectile-context player={context.Player.name} blocker={context.Blocker.m_dropPrefab?.name ?? context.Blocker.m_shared?.m_name ?? "<unknown>"} count={state.Blocks.Count} frame={Time.frameCount}");
+    }
+
+    private static bool TryConsumePendingShieldReflectBlock(
+        Player player,
+        ZDOID projectileId,
+        ShieldReflectProjectileContext projectileContext,
+        string source,
+        float now)
+    {
+        if (!ShieldReflectPendingBlocks.TryGetValue(player, out PendingShieldReflectBlockState? state))
+        {
+            return false;
+        }
+
+        PruneExpiredShieldReflectBlocks(state, now);
+        if (state.Blocks.Count == 0)
+        {
+            return false;
+        }
+
+        int index = SelectPendingShieldReflectBlock(state, projectileContext.HitPoint);
+        if (index < 0)
+        {
+            LogShieldReflectDebug(
+                "block.pending.skip.distance",
+                () => $"block.pending.skip reason=hit-point-distance projectile={projectileContext.ProjectileName} projectileId={projectileId} player={player.name} pending={state.Blocks.Count} frame={Time.frameCount}");
+            return false;
+        }
+
+        PendingShieldReflectBlock pending = state.Blocks[index];
+        state.Blocks.RemoveAt(index);
+        LogShieldReflectDebug(
+            "block.pending.consumed",
+            () => $"block.pending.consumed projectile={projectileContext.ProjectileName} projectileId={projectileId} source={source} player={player.name} remaining={state.Blocks.Count} frame={Time.frameCount}");
+
+        FinalizeShieldReflect(player, pending.Blocker, pending.Definition, pending.VanillaBlockStaminaCost, projectileContext, source + "-late");
+        return true;
+    }
+
+    private static void FinalizeShieldReflect(
+        Player player,
+        ItemDrop.ItemData blocker,
+        SecondaryAttackDefinition definition,
+        float vanillaBlockStaminaCost,
+        ShieldReflectProjectileContext projectileContext,
+        string source)
+    {
         Projectile? projectile = projectileContext.Projectile;
         if (projectileContext.Water ||
             !projectileContext.Blockable ||
@@ -223,38 +311,38 @@ internal static partial class SecondaryAttackManager
         {
             LogShieldReflectDebug(
                 "finalize.skip.projectile",
-                () => $"finalize.skip reason=invalid-projectile player={context.Player.name} projectile={projectileContext.ProjectileName} water={projectileContext.Water} source={context.ProjectileContextSource} frame={Time.frameCount}");
+                () => $"finalize.skip reason=invalid-projectile player={player.name} projectile={projectileContext.ProjectileName} water={projectileContext.Water} source={source} frame={Time.frameCount}");
             return;
         }
 
-        float staminaDelta = context.VanillaBlockStaminaCost * (Mathf.Max(0f, context.Definition.ShieldProjectileReflectStaminaFactor) - 1f);
-        if (staminaDelta > 0f && !context.Player.HaveStamina(staminaDelta))
+        float staminaDelta = vanillaBlockStaminaCost * (Mathf.Max(0f, definition.ShieldProjectileReflectStaminaFactor) - 1f);
+        if (staminaDelta > 0f && !player.HaveStamina(staminaDelta))
         {
             LogShieldReflectDebug(
                 "finalize.skip.stamina",
-                () => $"finalize.skip reason=stamina player={context.Player.name} projectile={projectileContext.ProjectileName} staminaDelta={staminaDelta:0.###} source={context.ProjectileContextSource} frame={Time.frameCount}");
+                () => $"finalize.skip reason=stamina player={player.name} projectile={projectileContext.ProjectileName} staminaDelta={staminaDelta:0.###} source={source} frame={Time.frameCount}");
             return;
         }
 
-        if (!TryReflectShieldProjectile(context.Player, context.Blocker, context.Definition, projectileContext))
+        if (!TryReflectShieldProjectile(player, blocker, definition, projectileContext))
         {
             LogShieldReflectDebug(
                 "finalize.skip.reflect",
-                () => $"finalize.skip reason=reflect-failed player={context.Player.name} projectile={projectileContext.ProjectileName} source={context.ProjectileContextSource} frame={Time.frameCount}");
+                () => $"finalize.skip reason=reflect-failed player={player.name} projectile={projectileContext.ProjectileName} source={source} frame={Time.frameCount}");
             return;
         }
 
         LogShieldReflectDebug(
             "finalize.success",
-            () => $"finalize.success player={context.Player.name} projectile={projectileContext.ProjectileName} source={context.ProjectileContextSource} staminaDelta={staminaDelta:0.###} frame={Time.frameCount}");
+            () => $"finalize.success player={player.name} projectile={projectileContext.ProjectileName} source={source} staminaDelta={staminaDelta:0.###} frame={Time.frameCount}");
 
         if (staminaDelta > 0f)
         {
-            context.Player.UseStamina(staminaDelta);
+            player.UseStamina(staminaDelta);
         }
         else if (staminaDelta < 0f)
         {
-            context.Player.AddStamina(-staminaDelta);
+            player.AddStamina(-staminaDelta);
         }
     }
 
@@ -351,6 +439,39 @@ internal static partial class SecondaryAttackManager
             if (state.Contexts[index].ExpiresAt <= now)
             {
                 state.Contexts.RemoveAt(index);
+            }
+        }
+    }
+
+    private static int SelectPendingShieldReflectBlock(PendingShieldReflectBlockState state, Vector3 hitPoint)
+    {
+        if (state.Blocks.Count <= 1)
+        {
+            return 0;
+        }
+
+        int bestIndex = 0;
+        float bestDistance = float.PositiveInfinity;
+        for (int index = 0; index < state.Blocks.Count; index++)
+        {
+            float distance = (state.Blocks[index].HitPoint - hitPoint).sqrMagnitude;
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestIndex = index;
+            }
+        }
+
+        return bestDistance <= ShieldReflectPendingHitPointMaxDistanceSqr ? bestIndex : -1;
+    }
+
+    private static void PruneExpiredShieldReflectBlocks(PendingShieldReflectBlockState state, float now)
+    {
+        for (int index = state.Blocks.Count - 1; index >= 0; index--)
+        {
+            if (state.Blocks[index].ExpiresAt <= now)
+            {
+                state.Blocks.RemoveAt(index);
             }
         }
     }
@@ -764,6 +885,11 @@ internal static partial class SecondaryAttackManager
         public List<PendingShieldReflectContext> Contexts { get; } = new(ShieldReflectMaxPendingContextsPerPlayer);
     }
 
+    private sealed class PendingShieldReflectBlockState
+    {
+        public List<PendingShieldReflectBlock> Blocks { get; } = new(ShieldReflectMaxPendingBlocksPerPlayer);
+    }
+
     private readonly struct PendingShieldReflectContext
     {
         public PendingShieldReflectContext(ZDOID projectileId, ShieldReflectProjectileContext context, float expiresAt)
@@ -776,6 +902,33 @@ internal static partial class SecondaryAttackManager
         public ZDOID ProjectileId { get; }
 
         public ShieldReflectProjectileContext Context { get; }
+
+        public float ExpiresAt { get; }
+    }
+
+    private readonly struct PendingShieldReflectBlock
+    {
+        public PendingShieldReflectBlock(
+            ItemDrop.ItemData blocker,
+            SecondaryAttackDefinition definition,
+            Vector3 hitPoint,
+            float vanillaBlockStaminaCost,
+            float expiresAt)
+        {
+            Blocker = blocker;
+            Definition = definition;
+            HitPoint = hitPoint;
+            VanillaBlockStaminaCost = vanillaBlockStaminaCost;
+            ExpiresAt = expiresAt;
+        }
+
+        public ItemDrop.ItemData Blocker { get; }
+
+        public SecondaryAttackDefinition Definition { get; }
+
+        public Vector3 HitPoint { get; }
+
+        public float VanillaBlockStaminaCost { get; }
 
         public float ExpiresAt { get; }
     }

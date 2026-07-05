@@ -17,7 +17,7 @@ namespace CaptainValheim;
 public class CaptainValheimPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CaptainValheim";
-    internal const string ModVersion = "1.0.2";
+    internal const string ModVersion = "1.0.3";
     internal const string Author = "sighsorry";
     private const string ModGUID = $"{Author}.{ModName}";
     private static string ConfigFileName = $"{ModGUID}.cfg";
