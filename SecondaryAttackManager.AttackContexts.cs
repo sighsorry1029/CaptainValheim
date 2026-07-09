@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace CaptainValheim;
@@ -14,8 +13,8 @@ internal static partial class SecondaryAttackManager
     private const int ShieldReflectMaxPendingContextsPerPlayer = 8;
     private const int ShieldReflectMaxPendingBlocksPerPlayer = 8;
     private const float ShieldReflectDebugThrottleSeconds = 0.5f;
-    private static readonly ConditionalWeakTable<Player, PendingShieldReflectState> ShieldReflectPendingContexts = new();
-    private static readonly ConditionalWeakTable<Player, PendingShieldReflectBlockState> ShieldReflectPendingBlocks = new();
+    private static readonly Dictionary<ZDOID, PendingShieldReflectState> ShieldReflectPendingContexts = new();
+    private static readonly Dictionary<ZDOID, PendingShieldReflectBlockState> ShieldReflectPendingBlocks = new();
     private static readonly Dictionary<string, float> ShieldReflectDebugNextLogTimes = new(StringComparer.Ordinal);
 
     // Public compatibility bridge for external integrations. Internal runtime code should call SecondaryAttackRuntimeFacade directly.
@@ -133,12 +132,22 @@ internal static partial class SecondaryAttackManager
         string source)
     {
         float now = GetNetworkTimeSeconds();
-        if (TryConsumePendingShieldReflectBlock(player, projectileId, context, source, now))
+        if (!TryGetShieldReflectPlayerId(player, out ZDOID playerId))
         {
             return;
         }
 
-        PendingShieldReflectState state = ShieldReflectPendingContexts.GetValue(player, _ => new PendingShieldReflectState());
+        if (TryConsumePendingShieldReflectBlock(player, playerId, projectileId, context, source, now))
+        {
+            return;
+        }
+
+        if (!ShieldReflectPendingContexts.TryGetValue(playerId, out PendingShieldReflectState? state))
+        {
+            state = new PendingShieldReflectState();
+            ShieldReflectPendingContexts[playerId] = state;
+        }
+
         PruneExpiredShieldReflectContexts(state, now);
         while (state.Contexts.Count >= ShieldReflectMaxPendingContextsPerPlayer)
         {
@@ -240,7 +249,17 @@ internal static partial class SecondaryAttackManager
         }
 
         float now = GetNetworkTimeSeconds();
-        PendingShieldReflectBlockState state = ShieldReflectPendingBlocks.GetValue(context.Player, _ => new PendingShieldReflectBlockState());
+        if (!TryGetShieldReflectPlayerId(context.Player, out ZDOID playerId))
+        {
+            return;
+        }
+
+        if (!ShieldReflectPendingBlocks.TryGetValue(playerId, out PendingShieldReflectBlockState? state))
+        {
+            state = new PendingShieldReflectBlockState();
+            ShieldReflectPendingBlocks[playerId] = state;
+        }
+
         PruneExpiredShieldReflectBlocks(state, now);
         while (state.Blocks.Count >= ShieldReflectMaxPendingBlocksPerPlayer)
         {
@@ -260,12 +279,13 @@ internal static partial class SecondaryAttackManager
 
     private static bool TryConsumePendingShieldReflectBlock(
         Player player,
+        ZDOID playerId,
         ZDOID projectileId,
         ShieldReflectProjectileContext projectileContext,
         string source,
         float now)
     {
-        if (!ShieldReflectPendingBlocks.TryGetValue(player, out PendingShieldReflectBlockState? state))
+        if (!ShieldReflectPendingBlocks.TryGetValue(playerId, out PendingShieldReflectBlockState? state))
         {
             return false;
         }
@@ -273,6 +293,7 @@ internal static partial class SecondaryAttackManager
         PruneExpiredShieldReflectBlocks(state, now);
         if (state.Blocks.Count == 0)
         {
+            ShieldReflectPendingBlocks.Remove(playerId);
             return false;
         }
 
@@ -287,6 +308,11 @@ internal static partial class SecondaryAttackManager
 
         PendingShieldReflectBlock pending = state.Blocks[index];
         state.Blocks.RemoveAt(index);
+        if (state.Blocks.Count == 0)
+        {
+            ShieldReflectPendingBlocks.Remove(playerId);
+        }
+
         LogShieldReflectDebug(
             "block.pending.consumed",
             () => $"block.pending.consumed projectile={projectileContext.ProjectileName} projectileId={projectileId} source={source} player={player.name} remaining={state.Blocks.Count} frame={Time.frameCount}");
@@ -356,12 +382,12 @@ internal static partial class SecondaryAttackManager
     private static bool TryConsumePendingShieldReflectContext(Player player, HitData hit, out ShieldReflectProjectileContext? context)
     {
         context = null;
-        if (player == null)
+        if (player == null || !TryGetShieldReflectPlayerId(player, out ZDOID playerId))
         {
             return false;
         }
 
-        if (!ShieldReflectPendingContexts.TryGetValue(player, out PendingShieldReflectState? state))
+        if (!ShieldReflectPendingContexts.TryGetValue(playerId, out PendingShieldReflectState? state))
         {
             if (!hit.m_ranged)
             {
@@ -376,6 +402,7 @@ internal static partial class SecondaryAttackManager
         PruneExpiredShieldReflectContexts(state, GetNetworkTimeSeconds());
         if (state.Contexts.Count == 0)
         {
+            ShieldReflectPendingContexts.Remove(playerId);
             return false;
         }
 
@@ -397,6 +424,11 @@ internal static partial class SecondaryAttackManager
 
         PendingShieldReflectContext pending = state.Contexts[index];
         state.Contexts.RemoveAt(index);
+        if (state.Contexts.Count == 0)
+        {
+            ShieldReflectPendingContexts.Remove(playerId);
+        }
+
         context = pending.Context;
         LogShieldReflectDebug(
             "pending.consumed",
@@ -424,7 +456,10 @@ internal static partial class SecondaryAttackManager
             }
         }
 
-        return bestDistance <= ShieldReflectPendingHitPointMaxDistanceSqr ? bestIndex : -1;
+        // HitData points from a routed damage RPC are not reliable enough to be the sole
+        // correlation key. Requests are routed in order per target, so preserve FIFO as
+        // a bounded fallback when several projectiles arrive almost simultaneously.
+        return bestDistance <= ShieldReflectPendingHitPointMaxDistanceSqr ? bestIndex : 0;
     }
 
     private static bool IsPendingShieldReflectHitPointClose(PendingShieldReflectContext pending, Vector3 hitPoint)
@@ -462,7 +497,30 @@ internal static partial class SecondaryAttackManager
             }
         }
 
-        return bestDistance <= ShieldReflectPendingHitPointMaxDistanceSqr ? bestIndex : -1;
+        return bestDistance <= ShieldReflectPendingHitPointMaxDistanceSqr ? bestIndex : 0;
+    }
+
+    private static bool TryGetShieldReflectPlayerId(Player player, out ZDOID playerId)
+    {
+        playerId = ZDOID.None;
+        if (!TryGetCharacterZdo(player, out _, out ZDO? zdo) || zdo == null || zdo.m_uid == ZDOID.None)
+        {
+            return false;
+        }
+
+        playerId = zdo.m_uid;
+        return true;
+    }
+
+    internal static void ForgetShieldReflectState(Character character)
+    {
+        if (character is not Player player || !TryGetShieldReflectPlayerId(player, out ZDOID playerId))
+        {
+            return;
+        }
+
+        ShieldReflectPendingContexts.Remove(playerId);
+        ShieldReflectPendingBlocks.Remove(playerId);
     }
 
     private static void PruneExpiredShieldReflectBlocks(PendingShieldReflectBlockState state, float now)
@@ -523,9 +581,12 @@ internal static partial class SecondaryAttackManager
         SecondaryAttackDefinition definition,
         ShieldReflectProjectileContext projectileContext)
     {
-        GameObject? sourcePrefab = projectileContext.Projectile != null
-            ? projectileContext.Projectile.gameObject
-            : ZNetScene.instance?.GetPrefab(projectileContext.ProjectilePrefabName);
+        GameObject? sourcePrefab = ZNetScene.instance?.GetPrefab(projectileContext.ProjectilePrefabName);
+        if (sourcePrefab == null && projectileContext.Projectile != null)
+        {
+            sourcePrefab = projectileContext.Projectile.gameObject;
+        }
+
         if (sourcePrefab == null)
         {
             return false;

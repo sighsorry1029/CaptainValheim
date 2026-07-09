@@ -176,6 +176,15 @@ internal static class HumanoidBlockAttackPatch
     }
 }
 
+[HarmonyPatch(typeof(Character), "OnDestroy")]
+internal static class CharacterOnDestroyShieldReflectStatePatch
+{
+    private static void Prefix(Character __instance)
+    {
+        SecondaryAttackManager.ForgetShieldReflectState(__instance);
+    }
+}
+
 [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.StartAttack))]
 internal static class HumanoidStartAttackPatch
 {
