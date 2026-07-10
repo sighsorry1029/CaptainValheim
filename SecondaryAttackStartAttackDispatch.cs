@@ -2,20 +2,13 @@ namespace CaptainValheim;
 
 internal static class SecondaryAttackStartAttackDispatch
 {
-    internal readonly struct StartAttackState
-    {
-        internal static readonly StartAttackState Empty = new();
-    }
-
     internal static bool Prefix(
         Humanoid humanoid,
         bool secondaryAttack,
         ref bool result,
         ItemDrop.ItemData leftItem,
-        ItemDrop.ItemData rightItem,
-        out StartAttackState state)
+        ItemDrop.ItemData rightItem)
     {
-        state = StartAttackState.Empty;
         if (TryBlockActiveShieldCharge(humanoid, ref result))
         {
             return false;
@@ -35,18 +28,19 @@ internal static class SecondaryAttackStartAttackDispatch
         return true;
     }
 
-    internal static void Postfix(
-        Humanoid humanoid,
-        bool secondaryAttack,
-        bool result,
-        StartAttackState state)
+    internal static void Postfix(Humanoid humanoid, bool result)
     {
         ShieldRuntimeSystem.EndShieldAttackStart(humanoid, result);
     }
 
+    internal static void Finalize(Humanoid humanoid)
+    {
+        ShieldRuntimeSystem.EndShieldAttackStart(humanoid, startedAttack: false);
+    }
+
     private static bool TryBlockActiveShieldCharge(Humanoid humanoid, ref bool result)
     {
-        if (!ShieldRuntimeSystem.IsShieldChargeActiveForDebug(humanoid))
+        if (!ShieldRuntimeSystem.IsShieldChargeActive(humanoid))
         {
             return false;
         }

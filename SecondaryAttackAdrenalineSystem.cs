@@ -23,7 +23,7 @@ internal static class SecondaryAttackAdrenalineSystem
 
     internal static float ResolveFactor(ActiveSecondaryAttack activeAttack)
     {
-        if (activeAttack.Definition.Behavior is not ShieldSpecialSecondaryBehavior shield)
+        if (activeAttack.Definition.ShieldSpecial is not { } shield)
         {
             return 1f;
         }

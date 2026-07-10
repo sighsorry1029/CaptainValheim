@@ -7,8 +7,6 @@ namespace CaptainValheim;
 
 internal static class SecondaryAttackWorldApplySystem
 {
-    private static int _nextApplyRevision = 1;
-
     public static SecondaryAttackAppliedWorldSnapshot Apply(
         ObjectDB objectDb,
         SecondaryAttackCompiledSnapshot compiledSnapshot,
@@ -19,10 +17,9 @@ internal static class SecondaryAttackWorldApplySystem
             return SecondaryAttackAppliedWorldSnapshot.Empty;
         }
 
-        SecondaryAttackWorldApplyContributors.BeforeDefinitions(objectDb, compiledSnapshot, emitMissingWarnings);
-        SecondaryAttackManager.ResetWorldApplyTransientState();
-        SecondaryAttackDefinitionBuildContext buildContext = new(objectDb, emitMissingWarnings);
-
+        SecondaryAttackObjectDbStateStore.Capture(objectDb);
+        SecondaryAttackObjectDbStateStore.Restore(objectDb);
+        ShieldRuntimeSystem.ResetTransientState();
         Dictionary<string, SecondaryAttackDefinition> appliedDefinitions = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> seenConfiguredPrefabs = new(StringComparer.OrdinalIgnoreCase);
         int appliedCount = 0;
@@ -63,10 +60,10 @@ internal static class SecondaryAttackWorldApplySystem
             }
 
             if (!SecondaryAttackDefinitionCompiler.TryCreateDefinition(
-                    buildContext,
                     itemPrefab.name,
                     itemDrop,
                     weaponConfig,
+                    emitMissingWarnings,
                     out SecondaryAttackDefinition? definition))
             {
                 continue;
@@ -78,9 +75,8 @@ internal static class SecondaryAttackWorldApplySystem
 
             if (resolvedDefinition.AppliesSecondaryOverride)
             {
-                Attack sourceAttack = SecondaryAttackManager.ResolveSourceAttack(objectDb, itemDrop, resolvedDefinition);
-                Attack configuredSecondaryAttack = SecondaryAttackManager.BuildSecondaryAttack(sourceAttack, resolvedDefinition);
-                resolvedDefinition.ConfiguredSecondaryAttack = SecondaryAttackManager.CloneAttack(configuredSecondaryAttack);
+                Attack sourceAttack = SecondaryAttackManager.ResolveSourceAttack(itemDrop);
+                Attack configuredSecondaryAttack = SecondaryAttackManager.BuildSecondaryAttack(sourceAttack);
                 itemDrop.m_itemData.m_shared.m_secondaryAttack = configuredSecondaryAttack;
             }
 
@@ -91,7 +87,7 @@ internal static class SecondaryAttackWorldApplySystem
             }
         }
 
-        SecondaryAttackAppliedWorldSnapshot appliedWorldSnapshot = new(compiledSnapshot, appliedDefinitions, _nextApplyRevision++);
+        SecondaryAttackAppliedWorldSnapshot appliedWorldSnapshot = new(appliedDefinitions);
 
         foreach (string configuredPrefabName in compiledSnapshot.Weapons.Keys.Where(key => !seenConfiguredPrefabs.Contains(key)))
         {
@@ -107,7 +103,7 @@ internal static class SecondaryAttackWorldApplySystem
             }
         }
 
-        SecondaryAttackWorldApplyContributors.AfterDefinitions(objectDb, appliedWorldSnapshot, emitMissingWarnings);
+        ShieldChargeCooldownStatusSystem.RegisterStatusEffect(objectDb);
         CaptainValheimPlugin.ModLogger.LogInfo($"Applied {appliedCount} shield definition(s), including {appliedGlobalShieldFallbackCount} global shield fallback definition(s).");
         return appliedWorldSnapshot;
     }

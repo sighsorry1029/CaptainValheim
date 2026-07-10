@@ -1,7 +1,5 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using BepInEx;
 using ServerSync;
 using UnityEngine;
@@ -18,89 +16,43 @@ internal static class SecondaryAttackFacade
 
     private static readonly object ReloadLock = new();
     private static FileSystemWatcher? _watcher;
-    private static readonly Dictionary<SecondaryAttackYamlDomainId, CustomSyncedValue<string>> SyncedYamlValues = new();
+    private static CustomSyncedValue<string>? _syncedYamlValue;
     private static SecondaryAttackCompiledSnapshot _currentCompiledSnapshot = SecondaryAttackCompiledSnapshot.Empty;
     private static SecondaryAttackCompiledSnapshot? _pendingCompiledSnapshot;
     private static SecondaryAttackAppliedWorldSnapshot _currentAppliedWorldSnapshot = SecondaryAttackAppliedWorldSnapshot.Empty;
     private static DateTime _lastYamlReloadTime;
     private static bool _hasPendingConfig;
-    private static bool _hasPendingWorldReapply;
-    private static int _nextSnapshotId = 1;
     private static bool _suppressSyncedYamlChanged;
     private static YamlAuthorityMode _yamlAuthorityMode;
     private static string _currentYamlFingerprint = string.Empty;
     private static string? _pendingYamlFingerprint;
 
-    internal static SecondaryAttackCompiledSnapshot CurrentCompiledSnapshot => _currentCompiledSnapshot;
-
     internal static SecondaryAttackAppliedWorldSnapshot CurrentAppliedWorldSnapshot => _currentAppliedWorldSnapshot;
 
     public static void Initialize()
     {
-        SecondaryAttackConfigLoader.EnsureLocalFilesExist();
-        InitializeSyncedYamlValues();
-
+        SecondaryAttackConfigLoader.EnsureLocalFileExists();
+        InitializeSyncedYamlValue();
         RefreshYamlAuthorityMode(force: true);
     }
 
     public static void Dispose()
     {
-        DisposeSyncedYamlValues();
-
-        _watcher?.Dispose();
-        _watcher = null;
-    }
-
-    public static void ApplyToObjectDb(ObjectDB objectDb, bool emitMissingWarnings)
-    {
-        RefreshYamlAuthorityMode();
-        ApplyCompiledSnapshotToObjectDb(objectDb, _currentCompiledSnapshot, emitMissingWarnings);
+        DisposeSyncedYamlValue();
+        DisposeWatcher();
     }
 
     internal static void TryApplyPendingConfig()
     {
         RefreshYamlAuthorityMode();
-        if (CommitPendingConfig(force: false, applyToObjectDbImmediately: true))
-        {
-            return;
-        }
-
-        CommitPendingWorldReapply(force: false);
-    }
-
-    internal static void RequestCurrentWorldReapply()
-    {
-        lock (ReloadLock)
-        {
-            StageWorldReapply();
-        }
+        CommitPendingConfig(force: false, applyToObjectDbImmediately: true);
     }
 
     internal static void ApplyPendingConfigToObjectDb(ObjectDB objectDb, bool emitMissingWarnings)
     {
         RefreshYamlAuthorityMode();
-        bool appliedPendingConfig = CommitPendingConfig(force: true, applyToObjectDbImmediately: false);
+        CommitPendingConfig(force: true, applyToObjectDbImmediately: false);
         ApplyCompiledSnapshotToObjectDb(objectDb, _currentCompiledSnapshot, emitMissingWarnings);
-        if (appliedPendingConfig)
-        {
-            CaptainValheimPlugin.ModLogger.LogInfo("Applied staged YAML config changes.");
-        }
-    }
-
-    internal static void ApplyPendingConfigToZNetScene(ZNetScene scene, bool emitMissingWarnings)
-    {
-        RefreshYamlAuthorityMode();
-        bool appliedPendingConfig = CommitPendingConfig(force: true, applyToObjectDbImmediately: false);
-        ApplyCompiledSnapshotToZNetScene(scene, _currentCompiledSnapshot, emitMissingWarnings);
-        if (ObjectDB.instance != null)
-        {
-            ApplyCompiledSnapshotToObjectDb(ObjectDB.instance, _currentCompiledSnapshot, emitMissingWarnings, applyZNetScene: false);
-        }
-
-        if (appliedPendingConfig)
-        {
-            CaptainValheimPlugin.ModLogger.LogInfo("Applied staged YAML config changes.");
-        }
     }
 
     private static void SetupWatcher()
@@ -110,8 +62,8 @@ internal static class SecondaryAttackFacade
             return;
         }
 
-        Directory.CreateDirectory(SecondaryAttackYamlDomainRegistry.ConfigDirectoryPath);
-        _watcher = new FileSystemWatcher(SecondaryAttackYamlDomainRegistry.ConfigDirectoryPath, SecondaryAttackYamlDomainRegistry.ShieldsYamlFileName);
+        Directory.CreateDirectory(SecondaryAttackYamlConfig.DirectoryPath);
+        _watcher = new FileSystemWatcher(SecondaryAttackYamlConfig.DirectoryPath, SecondaryAttackYamlConfig.FileName);
         _watcher.Changed += OnYamlFileChanged;
         _watcher.Created += OnYamlFileChanged;
         _watcher.Renamed += OnYamlFileChanged;
@@ -128,7 +80,7 @@ internal static class SecondaryAttackFacade
         }
 
         DateTime now = DateTime.Now;
-        if (now.Ticks - _lastYamlReloadTime.Ticks < SecondaryAttackYamlDomainRegistry.ReloadDelayTicks)
+        if (now.Ticks - _lastYamlReloadTime.Ticks < SecondaryAttackYamlConfig.ReloadDelayTicks)
         {
             return;
         }
@@ -147,18 +99,14 @@ internal static class SecondaryAttackFacade
             return;
         }
 
-        SecondaryAttackConfigLoader.EnsureLocalFilesExist();
-        SecondaryAttackYamlTexts yamlTexts = SecondaryAttackConfigLoader.ReadLocalYamlTexts();
-
-        if (SyncedYamlValues.Count == SecondaryAttackYamlDomainRegistry.Domains.Count)
+        SecondaryAttackConfigLoader.EnsureLocalFileExists();
+        string yamlText = SecondaryAttackConfigLoader.ReadLocalYamlText();
+        if (_syncedYamlValue != null)
         {
             _suppressSyncedYamlChanged = true;
             try
             {
-                foreach (SecondaryAttackYamlDomain domain in SecondaryAttackYamlDomainRegistry.Domains)
-                {
-                    SyncedYamlValues[domain.Id].AssignLocalValue(yamlTexts.Get(domain.Id));
-                }
+                _syncedYamlValue.AssignLocalValue(yamlText);
             }
             finally
             {
@@ -166,17 +114,15 @@ internal static class SecondaryAttackFacade
             }
         }
 
-        ApplyYamlTexts(yamlTexts);
+        ApplyYamlText(yamlText);
     }
 
     private static void OnSyncedYamlChanged()
     {
-        if (_suppressSyncedYamlChanged)
+        if (!_suppressSyncedYamlChanged)
         {
-            return;
+            ApplyYamlText(_syncedYamlValue?.Value ?? string.Empty);
         }
-
-        ApplyYamlTexts(ReadSyncedYamlTexts());
     }
 
     private static void RefreshYamlAuthorityMode(bool force = false)
@@ -197,27 +143,32 @@ internal static class SecondaryAttackFacade
                 break;
             case YamlAuthorityMode.SyncedOnly:
                 DisposeWatcher();
-                if (AnySyncedYamlHasValue())
+                if (!string.IsNullOrEmpty(_syncedYamlValue?.Value))
                 {
-                    ApplyYamlTexts(ReadSyncedYamlTexts());
+                    ApplyYamlText(_syncedYamlValue!.Value);
                 }
                 else
                 {
-                    _pendingCompiledSnapshot = null;
-                    _pendingYamlFingerprint = null;
-                    _hasPendingConfig = false;
-                    _hasPendingWorldReapply = false;
-                    _currentCompiledSnapshot = SecondaryAttackCompiledSnapshot.Empty;
-                    _currentYamlFingerprint = string.Empty;
-                    _currentAppliedWorldSnapshot = SecondaryAttackAppliedWorldSnapshot.Empty;
-                    if (ZNetScene.instance != null)
-                    {
-                        ApplyCompiledSnapshotToZNetScene(ZNetScene.instance, _currentCompiledSnapshot, emitMissingWarnings: true);
-                    }
+                    ClearConfigWhileWaitingForServer();
                 }
 
                 CaptainValheimPlugin.ModLogger.LogInfo("CaptainValheim YAML authority mode: SyncedOnly.");
                 break;
+        }
+    }
+
+    private static void ClearConfigWhileWaitingForServer()
+    {
+        _pendingCompiledSnapshot = null;
+        _pendingYamlFingerprint = null;
+        _hasPendingConfig = false;
+        _currentCompiledSnapshot = SecondaryAttackCompiledSnapshot.Empty;
+        _currentYamlFingerprint = string.Empty;
+        _currentAppliedWorldSnapshot = SecondaryAttackAppliedWorldSnapshot.Empty;
+        if (ObjectDB.instance != null)
+        {
+            SecondaryAttackObjectDbStateStore.Restore(ObjectDB.instance);
+            ShieldRuntimeSystem.ResetTransientState();
         }
     }
 
@@ -228,66 +179,43 @@ internal static class SecondaryAttackFacade
             : YamlAuthorityMode.LocalFiles;
     }
 
-    private static void InitializeSyncedYamlValues()
+    private static void InitializeSyncedYamlValue()
     {
-        DisposeSyncedYamlValues();
-        foreach (SecondaryAttackYamlDomain domain in SecondaryAttackYamlDomainRegistry.Domains)
-        {
-            CustomSyncedValue<string> syncedValue = new(CaptainValheimPlugin.ConfigSync, domain.SyncedIdentifier, "");
-            syncedValue.ValueChanged += OnSyncedYamlChanged;
-            SyncedYamlValues[domain.Id] = syncedValue;
-        }
+        DisposeSyncedYamlValue();
+        _syncedYamlValue = new CustomSyncedValue<string>(
+            CaptainValheimPlugin.ConfigSync,
+            SecondaryAttackYamlConfig.SyncedIdentifier,
+            string.Empty);
+        _syncedYamlValue.ValueChanged += OnSyncedYamlChanged;
     }
 
-    private static void DisposeSyncedYamlValues()
+    private static void DisposeSyncedYamlValue()
     {
-        foreach (CustomSyncedValue<string> syncedValue in SyncedYamlValues.Values)
-        {
-            syncedValue.ValueChanged -= OnSyncedYamlChanged;
-        }
-
-        SyncedYamlValues.Clear();
-    }
-
-    private static SecondaryAttackYamlTexts ReadSyncedYamlTexts()
-    {
-        Dictionary<SecondaryAttackYamlDomainId, string> texts = new();
-        foreach (SecondaryAttackYamlDomain domain in SecondaryAttackYamlDomainRegistry.Domains)
-        {
-            texts[domain.Id] = SyncedYamlValues.TryGetValue(domain.Id, out CustomSyncedValue<string>? syncedValue)
-                ? syncedValue.Value
-                : string.Empty;
-        }
-
-        return new SecondaryAttackYamlTexts(texts);
-    }
-
-    private static bool AnySyncedYamlHasValue()
-    {
-        return SyncedYamlValues.Values.Any(syncedValue => !string.IsNullOrEmpty(syncedValue.Value));
-    }
-
-    private static void DisposeWatcher()
-    {
-        if (_watcher == null)
+        if (_syncedYamlValue == null)
         {
             return;
         }
 
-        _watcher.Dispose();
+        _syncedYamlValue.ValueChanged -= OnSyncedYamlChanged;
+        _syncedYamlValue = null;
+    }
+
+    private static void DisposeWatcher()
+    {
+        _watcher?.Dispose();
         _watcher = null;
     }
 
-    private static void ApplyYamlTexts(SecondaryAttackYamlTexts yamlTexts)
+    private static void ApplyYamlText(string yamlText)
     {
-        string fingerprint = yamlTexts.GetContentFingerprint();
+        string fingerprint = yamlText ?? string.Empty;
         if (string.Equals(_currentYamlFingerprint, fingerprint, StringComparison.Ordinal) ||
             (_hasPendingConfig && string.Equals(_pendingYamlFingerprint, fingerprint, StringComparison.Ordinal)))
         {
             return;
         }
 
-        if (!SecondaryAttackConfigLoader.TryCompileSnapshot(_nextSnapshotId++, yamlTexts, out SecondaryAttackCompiledSnapshot? snapshot))
+        if (!SecondaryAttackConfigLoader.TryCompileSnapshot(fingerprint, out SecondaryAttackCompiledSnapshot? snapshot))
         {
             return;
         }
@@ -300,13 +228,7 @@ internal static class SecondaryAttackFacade
         _pendingCompiledSnapshot = snapshot;
         _pendingYamlFingerprint = fingerprint;
         _hasPendingConfig = true;
-        CommitPendingConfig(force: true, applyToObjectDbImmediately: true);
-    }
-
-    private static void StageWorldReapply()
-    {
-        _hasPendingWorldReapply = true;
-        CommitPendingWorldReapply(force: true);
+        CommitPendingConfig(force: false, applyToObjectDbImmediately: true);
     }
 
     private static bool CommitPendingConfig(bool force, bool applyToObjectDbImmediately)
@@ -336,49 +258,15 @@ internal static class SecondaryAttackFacade
         return true;
     }
 
-    private static bool CommitPendingWorldReapply(bool force)
-    {
-        if (!_hasPendingWorldReapply)
-        {
-            return false;
-        }
-
-        if (!force && !CanApplyPendingConfigNow())
-        {
-            return false;
-        }
-
-        if (ObjectDB.instance == null)
-        {
-            return false;
-        }
-
-        ApplyCompiledSnapshotToObjectDb(ObjectDB.instance, _currentCompiledSnapshot, emitMissingWarnings: true);
-        CaptainValheimPlugin.ModLogger.LogInfo("Applied staged world-apply config changes.");
-        return true;
-    }
-
     private static void ApplyCompiledSnapshotToObjectDb(
         ObjectDB objectDb,
         SecondaryAttackCompiledSnapshot compiledSnapshot,
-        bool emitMissingWarnings,
-        bool applyZNetScene = true)
-    {
-        _hasPendingWorldReapply = false;
-        if (applyZNetScene && ZNetScene.instance != null)
-        {
-            ApplyCompiledSnapshotToZNetScene(ZNetScene.instance, compiledSnapshot, emitMissingWarnings);
-        }
-
-        _currentAppliedWorldSnapshot = SecondaryAttackWorldApplySystem.Apply(objectDb, compiledSnapshot, emitMissingWarnings);
-    }
-
-    private static void ApplyCompiledSnapshotToZNetScene(
-        ZNetScene scene,
-        SecondaryAttackCompiledSnapshot compiledSnapshot,
         bool emitMissingWarnings)
     {
-        SecondaryAttackWorldApplyContributors.ApplyToZNetScene(scene, compiledSnapshot, emitMissingWarnings);
+        _currentAppliedWorldSnapshot = SecondaryAttackWorldApplySystem.Apply(
+            objectDb,
+            compiledSnapshot,
+            emitMissingWarnings);
     }
 
     private static bool CanApplyPendingConfigNow()
@@ -394,8 +282,7 @@ internal static class SecondaryAttackFacade
             return false;
         }
 
-        return !ShieldRuntimeSystem.IsShieldChargeActiveForDebug(localPlayer) &&
+        return !ShieldRuntimeSystem.IsShieldChargeActive(localPlayer) &&
                !SecondaryAttackManager.HasActiveAsyncSecondaryWorkForFacade(localPlayer);
     }
-
 }

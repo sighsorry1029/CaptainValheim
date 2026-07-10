@@ -3,18 +3,11 @@ using System.Collections.Generic;
 
 namespace CaptainValheim;
 
-internal sealed class SecondaryAttackWeaponNormalizationResult
-{
-    public Dictionary<string, NormalizedWeaponConfig> Weapons { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-
-    public NormalizedWeaponConfig? GlobalShieldFallback { get; set; }
-}
-
 internal static class SecondaryAttackWeaponConfigNormalizer
 {
     private const string GlobalFallbackKey = "Global";
 
-    internal static SecondaryAttackWeaponNormalizationResult Normalize(
+    internal static NormalizedSecondaryAttackConfigFile Normalize(
         IReadOnlyDictionary<string, ShieldWeaponConfig> shields)
     {
         Dictionary<string, NormalizedWeaponConfig> normalizedWeapons = new(StringComparer.OrdinalIgnoreCase);
@@ -56,7 +49,7 @@ internal static class SecondaryAttackWeaponConfigNormalizer
             normalizedWeapons[normalizedPrefabName] = FromShieldRaw(shieldConfig, shieldFallback);
         }
 
-        return new SecondaryAttackWeaponNormalizationResult
+        return new NormalizedSecondaryAttackConfigFile
         {
             Weapons = normalizedWeapons,
             GlobalShieldFallback = globalShieldFallback

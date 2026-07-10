@@ -17,15 +17,24 @@ internal static partial class SecondaryAttackManager
     private static readonly Dictionary<ZDOID, PendingShieldReflectBlockState> ShieldReflectPendingBlocks = new();
     private static readonly Dictionary<string, float> ShieldReflectDebugNextLogTimes = new(StringComparer.Ordinal);
 
-    // Public compatibility bridge for external integrations. Internal runtime code should call SecondaryAttackRuntimeFacade directly.
-    public static bool BeginProjectileHitContext(Projectile projectile, Collider collider, Vector3 hitPoint, bool water, Vector3 normal)
+    internal sealed class BlockAttackContext
     {
-        return SecondaryAttackRuntimeFacade.BeginProjectileHitContext(projectile, collider, hitPoint, water, normal);
+        public Player? Player { get; set; }
+        public ItemDrop.ItemData? Blocker { get; set; }
+        public SecondaryAttackDefinition? Definition { get; set; }
+        public ShieldReflectProjectileContext? ProjectileContext { get; set; }
+        public string ProjectileContextSource { get; set; } = string.Empty;
+        public float VanillaBlockStaminaCost { get; set; }
     }
 
-    public static void EndProjectileHitContext(bool active)
+    private readonly struct BlockCostAnalysis
     {
-        SecondaryAttackRuntimeFacade.EndProjectileHitContext(active);
+        public BlockCostAnalysis(float staminaCost)
+        {
+            StaminaCost = staminaCost;
+        }
+
+        public float StaminaCost { get; }
     }
 
     internal static void TrySendShieldReflectRequest(Projectile projectile, Collider collider, Vector3 hitPoint, bool water, Vector3 normal)
@@ -185,7 +194,7 @@ internal static partial class SecondaryAttackManager
             return context;
         }
 
-        if (!TryGetDefinition(blocker, out SecondaryAttackDefinition definition) || !definition.ShieldProjectileReflect)
+        if (!SecondaryAttackRuntimeFacade.TryGetDefinition(blocker, out SecondaryAttackDefinition definition) || !definition.ShieldProjectileReflect)
         {
             return context;
         }
@@ -212,7 +221,6 @@ internal static partial class SecondaryAttackManager
         }
 
         BlockCostAnalysis costAnalysis = AnalyzeBlockCost(player, blocker, hit, blockTimer);
-        context.PostResistanceBlockableDamage = costAnalysis.PostResistanceBlockableDamage;
         context.VanillaBlockStaminaCost = costAnalysis.StaminaCost;
         return context;
     }
@@ -462,11 +470,6 @@ internal static partial class SecondaryAttackManager
         return bestDistance <= ShieldReflectPendingHitPointMaxDistanceSqr ? bestIndex : 0;
     }
 
-    private static bool IsPendingShieldReflectHitPointClose(PendingShieldReflectContext pending, Vector3 hitPoint)
-    {
-        return (pending.Context.HitPoint - hitPoint).sqrMagnitude <= ShieldReflectPendingHitPointMaxDistanceSqr;
-    }
-
     private static void PruneExpiredShieldReflectContexts(PendingShieldReflectState state, float now)
     {
         for (int index = state.Contexts.Count - 1; index >= 0; index--)
@@ -572,7 +575,7 @@ internal static partial class SecondaryAttackManager
         float blockedAmount = totalBlockableDamage - postArmorBlockableDamage;
         float blockUsageRatio = blockPower > 0f ? Mathf.Clamp01(blockedAmount / blockPower) : 0f;
         float staminaCost = timedBlock ? player.m_perfectBlockStaminaDrain : player.m_blockStaminaDrain * blockUsageRatio;
-        return new BlockCostAnalysis(totalBlockableDamage, staminaCost);
+        return new BlockCostAnalysis(staminaCost);
     }
 
     private static bool TryReflectShieldProjectile(
@@ -628,7 +631,6 @@ internal static partial class SecondaryAttackManager
             blocker,
             projectileContext.Ammo);
 
-        RegisterProjectileAttackAttribution(reflectedProjectile, disableCurrentAttackFallback: true);
         ShieldRuntimeSystem.MarkReflectedProjectile(reflectedProjectile);
         return true;
     }

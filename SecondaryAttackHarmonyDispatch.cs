@@ -24,28 +24,31 @@ internal static class SecondaryAttackHarmonyDispatch
         }
 
         state.RuntimeContext = SecondaryAttackRuntimeFacade.BeginProjectileHitContext(projectile, collider, hitPoint, water, normal);
-        SecondaryAttackManager.TrySendShieldReflectRequest(projectile, collider, hitPoint, water, normal);
-        return true;
+        try
+        {
+            SecondaryAttackManager.TrySendShieldReflectRequest(projectile, collider, hitPoint, water, normal);
+            return true;
+        }
+        catch
+        {
+            EndProjectileOnHit(ref state);
+            throw;
+        }
     }
 
-    internal static void ProjectileOnHitPostfix(
-        Projectile projectile,
-        Collider collider,
-        Vector3 hitPoint,
-        bool water,
-        Vector3 normal,
-        ProjectileOnHitState state)
+    internal static void EndProjectileOnHit(ref ProjectileOnHitState state)
     {
-        SecondaryAttackRuntimeFacade.EndProjectileHitContext(state.RuntimeContext);
+        bool active = state.RuntimeContext;
+        state.RuntimeContext = false;
+        SecondaryAttackRuntimeFacade.EndProjectileHitContext(active);
     }
 
-    internal static void PlayerUpdatePostfix(Player player, bool primaryAttackHold, bool secondaryAttackHold, bool secondaryAttackPressed, ref bool blocking)
+    internal static void PlayerUpdatePostfix(Player player)
     {
         if (player == Player.m_localPlayer)
         {
             SecondaryAttackFacade.TryApplyPendingConfig();
             ShieldRuntimeSystem.UpdateReturnedShieldAutoEquip(player);
-            ShieldOnlyKeyHintSystem.RefreshKeyHintUi();
         }
     }
 }

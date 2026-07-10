@@ -2,40 +2,105 @@ using UnityEngine;
 
 namespace CaptainValheim;
 
-internal static partial class SecondaryAttackDefinitionCompiler
+internal static class SecondaryAttackDefinitionCompiler
 {
     internal static bool TryCreateDefinition(
-        SecondaryAttackDefinitionBuildContext buildContext,
         string prefabName,
         ItemDrop itemDrop,
         NormalizedWeaponConfig weaponConfig,
+        bool emitWarnings,
         out SecondaryAttackDefinition? definition)
     {
         definition = null;
         ItemDrop.ItemData.SharedData? sharedData = itemDrop.m_itemData?.m_shared;
-        if (sharedData == null)
+        NormalizedShieldModeConfig? shieldConfig = weaponConfig.Shield;
+        if (sharedData == null || shieldConfig == null)
         {
             return false;
         }
 
-        DefinitionFeatures features = AnalyzeDefinitionFeatures(weaponConfig);
-        DefinitionValidationResult validation = ValidateDefinitionRequest(prefabName, sharedData, weaponConfig, features);
-        switch (validation.Disposition)
+        if (sharedData.m_itemType != ItemDrop.ItemData.ItemType.Shield)
         {
-            case DefinitionValidationDisposition.EffectOnly:
-                definition = SecondaryAttackManager.CreateEffectOnlyDefinition(prefabName, weaponConfig);
-                return true;
-            case DefinitionValidationDisposition.Skip:
-                return false;
-            default:
-                return TryCreateValidatedDefinition(
-                    buildContext,
-                    prefabName,
-                    sharedData,
-                    validation.PrimaryAttack ?? new Attack(),
-                    weaponConfig,
-                    features,
-                    out definition);
+            if (emitWarnings && SecondaryAttackWarningLog.TryMarkWarning($"non_shield_prefab:{prefabName}"))
+            {
+                CaptainValheimPlugin.ModLogger.LogWarning(
+                    $"Skipping {prefabName}: CaptainValheim shield features can only be used on shield prefabs.");
+            }
+
+            return false;
         }
+
+        bool hasShieldSpecial = shieldConfig.PrimaryAttack != null ||
+                                shieldConfig.Throw != null ||
+                                shieldConfig.Charge != null;
+        if (!hasShieldSpecial && shieldConfig.Reflect == null && shieldConfig.BlockCharge == null)
+        {
+            return false;
+        }
+
+        definition = CreateDefinition(shieldConfig);
+        if (hasShieldSpecial)
+        {
+            definition.ShieldSpecial = CreateShieldSpecialBehavior(shieldConfig);
+        }
+
+        return true;
+    }
+
+    private static SecondaryAttackDefinition CreateDefinition(NormalizedShieldModeConfig shieldConfig)
+    {
+        return new SecondaryAttackDefinition
+        {
+            ShieldProjectileReflect = shieldConfig.Reflect != null,
+            ShieldProjectileReflectStaminaFactor = Mathf.Max(0f, shieldConfig.Reflect?.StaminaFactor ?? 1f),
+            ShieldProjectileReflectionFactor = shieldConfig.Reflect?.ReflectionFactor ?? 0f,
+            ShieldBlockCharge = shieldConfig.BlockCharge != null,
+            ShieldBlockChargeCount = shieldConfig.BlockCharge?.ChargeCount,
+            ShieldBlockChargeDecayTime = shieldConfig.BlockCharge?.DecayTime,
+            ShieldBlockChargeBlockingDecayFactor = shieldConfig.BlockCharge?.BlockingDecayFactor
+        };
+    }
+
+    private static ShieldSpecialSecondaryBehavior CreateShieldSpecialBehavior(
+        NormalizedShieldModeConfig shieldConfig)
+    {
+        NormalizedShieldPrimaryAttackConfig? primaryAttackConfig = shieldConfig.PrimaryAttack;
+        NormalizedShieldThrowConfig? throwConfig = shieldConfig.Throw;
+        NormalizedShieldChargeConfig? chargeConfig = shieldConfig.Charge;
+        bool hasPrimaryAttack = primaryAttackConfig != null;
+        bool hasThrow = throwConfig != null;
+        bool hasCharge = chargeConfig != null;
+
+        return new ShieldSpecialSecondaryBehavior
+        {
+            HasShieldPrimaryAttack = hasPrimaryAttack,
+            ShieldPrimaryAttackDamageFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.DamageFactor) : 0f,
+            ShieldPrimaryAttackPushFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.PushFactor) : 0f,
+            ShieldPrimaryAttackStaminaFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.StaminaFactor) : 0f,
+            ShieldPrimaryAttackDurabilityFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.DurabilityFactor) : 1f,
+            ShieldPrimaryAttackAdrenalineFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.AdrenalineFactor) : 0f,
+            HasShieldThrow = hasThrow,
+            ShieldThrowAnimation = hasThrow ? throwConfig!.Animation : string.Empty,
+            ShieldThrowTargets = hasThrow ? Mathf.Max(0, throwConfig!.Targets) : 0,
+            ShieldThrowDamageFactor = hasThrow ? Mathf.Max(0f, throwConfig!.DamageFactor) : 0f,
+            ShieldThrowPushFactor = hasThrow ? Mathf.Max(0f, throwConfig!.PushFactor) : 0f,
+            ShieldThrowStaminaFactor = hasThrow ? Mathf.Max(0f, throwConfig!.StaminaFactor) : 0f,
+            ShieldThrowDurabilityFactor = hasThrow ? Mathf.Max(0f, throwConfig!.DurabilityFactor) : 1f,
+            ShieldThrowDamageDecay = hasThrow ? Mathf.Clamp01(throwConfig!.DamageDecay) : 0f,
+            ShieldThrowRadiusFactor = hasThrow ? Mathf.Max(0f, throwConfig!.RadiusFactor) : 0f,
+            ShieldThrowTtlFactor = hasThrow ? Mathf.Max(0f, throwConfig!.TtlFactor) : 0f,
+            ShieldThrowAdrenalineFactor = hasThrow ? Mathf.Max(0f, throwConfig!.AdrenalineFactor) : 0f,
+            HasShieldCharge = hasCharge,
+            ShieldChargeDamageFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.DamageFactor) : 0f,
+            ShieldChargePushFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.PushFactor) : 0f,
+            ShieldChargeStaminaFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.StaminaFactor) : 0f,
+            ShieldChargeDistance = hasCharge ? Mathf.Max(0f, chargeConfig!.Distance) : 0f,
+            ShieldChargeSpeed = hasCharge ? Mathf.Max(0f, chargeConfig!.Speed) : 0f,
+            ShieldChargeCooldown = hasCharge ? Mathf.Max(0f, chargeConfig!.Cooldown) : 0f,
+            ShieldChargeCooldownReductionFactor = hasCharge ? Mathf.Clamp01(chargeConfig!.CooldownReductionFactor) : 0f,
+            ShieldChargeDurabilityFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.DurabilityFactor) : 1f,
+            ShieldChargeHitRadiusFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.HitRadiusFactor) : 0f,
+            ShieldChargeAdrenalineFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.AdrenalineFactor) : 0f
+        };
     }
 }

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using HarmonyLib;
@@ -18,44 +17,6 @@ internal static partial class SecondaryAttackManager
     private static int ShieldChargeCollisionMask;
     private static int ShieldChargeImpactMask;
 
-    internal const bool ShouldLogShieldDebug = false;
-
-    [Conditional("CAPTAINVALHEIM_DEBUG_LOGGING")]
-    internal static void LogShieldDebug(string message)
-    {
-    }
-
-    // Public compatibility bridge for external integrations. Internal runtime code should call SecondaryAttackRuntimeFacade directly.
-    public static bool TryGetDefinition(ItemDrop.ItemData weapon, out SecondaryAttackDefinition definition)
-    {
-        return SecondaryAttackRuntimeFacade.TryGetDefinition(weapon, out definition);
-    }
-
-    public static bool TryGetDefinition(string weaponPrefabName, out SecondaryAttackDefinition definition)
-    {
-        return SecondaryAttackRuntimeFacade.TryGetDefinition(weaponPrefabName, out definition);
-    }
-
-    public static bool TryGetCurrentWeaponDefinition(out SecondaryAttackDefinition definition, out bool secondaryAttack)
-    {
-        return SecondaryAttackRuntimeFacade.TryGetCurrentWeaponDefinition(out definition, out secondaryAttack);
-    }
-
-    public static void RegisterActiveAttack(Attack attack, ItemDrop.ItemData weapon, ShieldSpecialMode shieldMode = ShieldSpecialMode.Throw)
-    {
-        SecondaryAttackRuntimeFacade.RegisterActiveAttack(attack, weapon, shieldMode);
-    }
-
-    public static bool TryHandleCustomAttackTrigger(Attack attack)
-    {
-        return SecondaryAttackRuntimeFacade.TryHandleCustomAttackTrigger(attack);
-    }
-
-    internal static void ResetWorldApplyTransientState()
-    {
-        ShieldRuntimeSystem.ResetTransientState();
-    }
-
     internal static bool TryMarkCompatibilityWarningReported(string warningKey)
     {
         return SecondaryAttackWarningLog.TryMarkWarning(warningKey);
@@ -68,71 +29,24 @@ internal static partial class SecondaryAttackManager
             : (Attack)MemberwiseCloneMethod.Invoke(sourceAttack, Array.Empty<object>())!;
     }
 
-    internal static bool TryCreateDefinition(
-        SecondaryAttackDefinitionBuildContext buildContext,
-        string prefabName,
-        ItemDrop itemDrop,
-        NormalizedWeaponConfig weaponConfig,
-        out SecondaryAttackDefinition? definition)
-    {
-        return SecondaryAttackDefinitionCompiler.TryCreateDefinition(buildContext, prefabName, itemDrop, weaponConfig, out definition);
-    }
-
-    internal static Attack BuildSecondaryAttack(Attack sourceAttack, SecondaryAttackDefinition definition)
+    internal static Attack BuildSecondaryAttack(Attack sourceAttack)
     {
         Attack secondaryAttack = CloneAttack(sourceAttack);
-        if (definition.BehaviorType == SecondaryAttackBehaviorType.ShieldSpecial)
-        {
-            secondaryAttack.m_attackType = Attack.AttackType.None;
-            secondaryAttack.m_bowDraw = false;
-            secondaryAttack.m_requiresReload = false;
-            secondaryAttack.m_projectiles = 1;
-            secondaryAttack.m_projectileBursts = 1;
-            secondaryAttack.m_attackChainLevels = 1;
-            secondaryAttack.m_attackRandomAnimations = 0;
-        }
-
-        secondaryAttack.m_attackAnimation = definition.AttackAnimation;
-        secondaryAttack.m_attackHealth = definition.RawAttackHealth;
-        secondaryAttack.m_attackHealthPercentage = definition.RawAttackHealthPercentage;
-        secondaryAttack.m_attackStamina = definition.RawAttackStamina;
-        secondaryAttack.m_attackEitr = definition.RawAttackEitr;
-        secondaryAttack.m_drawStaminaDrain = definition.RawDrawStamina;
-        secondaryAttack.m_drawEitrDrain = definition.RawDrawEitr;
-        secondaryAttack.m_reloadStaminaDrain = definition.RawReloadStamina;
-        secondaryAttack.m_reloadEitrDrain = definition.RawReloadEitr;
-        secondaryAttack.m_damageMultiplier *= definition.OutputMultiplier;
-        secondaryAttack.m_forceMultiplier *= definition.OutputMultiplier;
-        secondaryAttack.m_staggerMultiplier *= definition.OutputMultiplier;
-        if (definition.HasCustomAttackAnimation)
-        {
-            secondaryAttack.m_attackChainLevels = 1;
-            secondaryAttack.m_attackRandomAnimations = 0;
-        }
+        secondaryAttack.m_attackType = Attack.AttackType.None;
+        secondaryAttack.m_bowDraw = false;
+        secondaryAttack.m_requiresReload = false;
+        secondaryAttack.m_projectiles = 1;
+        secondaryAttack.m_projectileBursts = 1;
+        secondaryAttack.m_attackChainLevels = 1;
+        secondaryAttack.m_attackRandomAnimations = 0;
 
         return secondaryAttack;
     }
 
-    private static void ApplyAttackResourceScaling(SecondaryAttackDefinition definition, Attack sourceAttack, float resourceMultiplier)
-    {
-        float multiplier = Mathf.Max(0f, resourceMultiplier);
-        definition.ResourceMultiplier = multiplier;
-        definition.RawAttackHealth = Mathf.Max(0f, sourceAttack.m_attackHealth * multiplier);
-        definition.RawAttackHealthPercentage = Mathf.Max(0f, sourceAttack.m_attackHealthPercentage * multiplier);
-        definition.RawAttackStamina = Mathf.Max(0f, sourceAttack.m_attackStamina * multiplier);
-        definition.RawAttackEitr = Mathf.Max(0f, sourceAttack.m_attackEitr * multiplier);
-        definition.RawDrawStamina = Mathf.Max(0f, sourceAttack.m_drawStaminaDrain * multiplier);
-        definition.RawDrawEitr = Mathf.Max(0f, sourceAttack.m_drawEitrDrain * multiplier);
-        definition.RawReloadStamina = Mathf.Max(0f, sourceAttack.m_reloadStaminaDrain * multiplier);
-        definition.RawReloadEitr = Mathf.Max(0f, sourceAttack.m_reloadEitrDrain * multiplier);
-    }
-
-    internal static Attack ResolveSourceAttack(ObjectDB objectDb, ItemDrop itemDrop, SecondaryAttackDefinition definition)
+    internal static Attack ResolveSourceAttack(ItemDrop itemDrop)
     {
         ItemDrop.ItemData.SharedData sharedData = itemDrop.m_itemData.m_shared;
-        return definition.BehaviorType == SecondaryAttackBehaviorType.ShieldSpecial
-            ? sharedData.m_secondaryAttack ?? sharedData.m_attack ?? new Attack()
-            : sharedData.m_attack ?? sharedData.m_secondaryAttack ?? new Attack();
+        return sharedData.m_secondaryAttack ?? sharedData.m_attack ?? new Attack();
     }
 
     internal static bool HasCharacterAuthority(Character? character)
@@ -150,11 +64,6 @@ internal static partial class SecondaryAttackManager
     internal static float GetNetworkTimeSeconds()
     {
         return ZNet.instance != null ? (float)ZNet.instance.GetTimeSeconds() : Time.time;
-    }
-
-    internal static void PlayTriggeredAttackEffects(Attack attack)
-    {
-        PlayTriggeredAttackEffects(attack, 1f);
     }
 
     internal static void PlayTriggeredAttackEffects(Attack attack, float durabilityFactor)
@@ -223,31 +132,33 @@ internal static partial class SecondaryAttackManager
         return new SecondaryAttackDurabilityAdjustmentState(attack.m_weapon, attack.m_weapon.m_durability, factor);
     }
 
-    internal static void EndSecondaryAttackDurabilityAdjustment(SecondaryAttackDurabilityAdjustmentState state)
+    internal static void EndSecondaryAttackDurabilityAdjustment(ref SecondaryAttackDurabilityAdjustmentState state)
     {
         if (!state.Applies || state.Weapon?.m_shared == null)
         {
             return;
         }
 
-        float actualDrain = state.BeforeDurability - state.Weapon.m_durability;
+        SecondaryAttackDurabilityAdjustmentState adjustment = state;
+        state = SecondaryAttackDurabilityAdjustmentState.Empty;
+        float actualDrain = adjustment.BeforeDurability - adjustment.Weapon!.m_durability;
         if (actualDrain <= 0.001f)
         {
             return;
         }
 
-        float targetDrain = actualDrain * state.Factor;
-        state.Weapon.m_durability = Mathf.Clamp(
-            state.BeforeDurability - targetDrain,
+        float targetDrain = actualDrain * adjustment.Factor;
+        adjustment.Weapon.m_durability = Mathf.Clamp(
+            adjustment.BeforeDurability - targetDrain,
             0f,
-            Mathf.Max(state.Weapon.m_shared.m_maxDurability, state.BeforeDurability));
+            Mathf.Max(adjustment.Weapon.m_shared.m_maxDurability, adjustment.BeforeDurability));
     }
 
     internal static float ResolveActiveAttackDurabilityFactor(ActiveSecondaryAttack activeAttack)
     {
-        if (activeAttack.Definition.Behavior is not ShieldSpecialSecondaryBehavior shieldBehavior)
+        if (activeAttack.Definition.ShieldSpecial is not { } shieldBehavior)
         {
-            return activeAttack.Definition.DurabilityFactor;
+            return 1f;
         }
 
         return activeAttack.ShieldMode switch
@@ -377,37 +288,6 @@ internal static partial class SecondaryAttackManager
         Object.Destroy(gameObject);
     }
 
-    internal static void RegisterProjectileAttackAttribution(Projectile projectile, Attack attack)
-    {
-        if (projectile == null || attack == null)
-        {
-            return;
-        }
-
-        string weaponPrefabName = attack.m_weapon?.m_dropPrefab?.name ?? "";
-        SecondaryAttackDefinition? definition = null;
-        if (attack.m_weapon != null)
-        {
-            TryGetDefinition(attack.m_weapon, out definition);
-        }
-
-        SecondaryAttackRuntimeContext.SetProjectileAttackAttribution(
-            projectile,
-            new ProjectileAttackAttribution(weaponPrefabName, secondaryAttack: true, definition, disableCurrentAttackFallback: false));
-    }
-
-    internal static void RegisterProjectileAttackAttribution(Projectile projectile, bool disableCurrentAttackFallback)
-    {
-        if (projectile == null)
-        {
-            return;
-        }
-
-        SecondaryAttackRuntimeContext.SetProjectileAttackAttribution(
-            projectile,
-            new ProjectileAttackAttribution("", secondaryAttack: true, definition: null, disableCurrentAttackFallback));
-    }
-
     internal static void RegisterAsyncSecondaryWork(Character? owner)
     {
         if (owner == null)
@@ -440,20 +320,5 @@ internal static partial class SecondaryAttackManager
     private sealed class AsyncSecondaryActivityState
     {
         public int ActiveCount { get; set; }
-    }
-}
-
-internal static class ShieldPerformanceLog
-{
-    internal const bool Enabled = false;
-
-    internal static Stopwatch? Start()
-    {
-        return null;
-    }
-
-    [Conditional("CAPTAINVALHEIM_PERF_LOGGING")]
-    internal static void Stop(Stopwatch? stopwatch, string scope, Func<string> details)
-    {
     }
 }

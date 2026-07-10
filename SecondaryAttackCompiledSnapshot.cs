@@ -5,15 +5,12 @@ namespace CaptainValheim;
 
 internal sealed class SecondaryAttackCompiledSnapshot
 {
-    public static readonly SecondaryAttackCompiledSnapshot Empty = new(0, new NormalizedSecondaryAttackConfigFile());
+    public static readonly SecondaryAttackCompiledSnapshot Empty = new(new NormalizedSecondaryAttackConfigFile());
 
-    public SecondaryAttackCompiledSnapshot(int snapshotId, NormalizedSecondaryAttackConfigFile config)
+    public SecondaryAttackCompiledSnapshot(NormalizedSecondaryAttackConfigFile config)
     {
-        SnapshotId = snapshotId;
         Config = config ?? throw new ArgumentNullException(nameof(config));
     }
-
-    public int SnapshotId { get; }
 
     public NormalizedSecondaryAttackConfigFile Config { get; }
 
@@ -25,23 +22,13 @@ internal sealed class SecondaryAttackCompiledSnapshot
 internal sealed class SecondaryAttackAppliedWorldSnapshot
 {
     public static readonly SecondaryAttackAppliedWorldSnapshot Empty =
-        new(SecondaryAttackCompiledSnapshot.Empty, new Dictionary<string, SecondaryAttackDefinition>(StringComparer.OrdinalIgnoreCase), 0);
+        new(new Dictionary<string, SecondaryAttackDefinition>(StringComparer.OrdinalIgnoreCase));
 
     public SecondaryAttackAppliedWorldSnapshot(
-        SecondaryAttackCompiledSnapshot compiledSnapshot,
-        IReadOnlyDictionary<string, SecondaryAttackDefinition> definitionsByPrefabName,
-        int applyRevision)
+        IReadOnlyDictionary<string, SecondaryAttackDefinition> definitionsByPrefabName)
     {
-        CompiledSnapshot = compiledSnapshot ?? throw new ArgumentNullException(nameof(compiledSnapshot));
         DefinitionsByPrefabName = definitionsByPrefabName ?? throw new ArgumentNullException(nameof(definitionsByPrefabName));
-        ApplyRevision = applyRevision;
     }
-
-    public SecondaryAttackCompiledSnapshot CompiledSnapshot { get; }
-
-    public int SnapshotId => CompiledSnapshot.SnapshotId;
-
-    public int ApplyRevision { get; }
 
     public IReadOnlyDictionary<string, SecondaryAttackDefinition> DefinitionsByPrefabName { get; }
 }

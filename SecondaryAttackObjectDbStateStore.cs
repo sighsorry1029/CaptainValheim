@@ -29,11 +29,17 @@ internal static class SecondaryAttackObjectDbStateStore
             }
 
             ItemDrop.ItemData.SharedData sharedData = itemDrop.m_itemData.m_shared;
+            if (sharedData.m_itemType != ItemDrop.ItemData.ItemType.Shield)
+            {
+                continue;
+            }
+
             if (!snapshots.ContainsKey(itemPrefab.name))
             {
                 snapshots[itemPrefab.name] = new OriginalWeaponState(
-                    SecondaryAttackManager.CloneAttack(sharedData.m_secondaryAttack),
-                    sharedData.m_equipStatusEffect,
+                    sharedData.m_secondaryAttack != null
+                        ? SecondaryAttackManager.CloneAttack(sharedData.m_secondaryAttack)
+                        : null,
                     sharedData.m_buildBlockCharges,
                     sharedData.m_maxBlockCharges,
                     sharedData.m_blockChargeDecayTime,
@@ -68,8 +74,9 @@ internal static class SecondaryAttackObjectDbStateStore
             if (snapshots.TryGetValue(itemPrefab.name, out OriginalWeaponState snapshot))
             {
                 ItemDrop.ItemData.SharedData sharedData = itemDrop.m_itemData.m_shared;
-                sharedData.m_secondaryAttack = SecondaryAttackManager.CloneAttack(snapshot.OriginalSecondaryAttack);
-                sharedData.m_equipStatusEffect = snapshot.OriginalEquipStatusEffect;
+                sharedData.m_secondaryAttack = snapshot.OriginalSecondaryAttack != null
+                    ? SecondaryAttackManager.CloneAttack(snapshot.OriginalSecondaryAttack)
+                    : null!;
                 sharedData.m_buildBlockCharges = snapshot.OriginalBuildBlockCharges;
                 sharedData.m_maxBlockCharges = snapshot.OriginalMaxBlockCharges;
                 sharedData.m_blockChargeDecayTime = snapshot.OriginalBlockChargeDecayTime;
@@ -81,26 +88,10 @@ internal static class SecondaryAttackObjectDbStateStore
         }
     }
 
-    public static bool TryGetOriginalSecondaryAttack(ObjectDB objectDb, string prefabName, out Attack? attack)
-    {
-        attack = null;
-        if (objectDb == null ||
-            string.IsNullOrWhiteSpace(prefabName) ||
-            !Snapshots.TryGetValue(objectDb, out Dictionary<string, OriginalWeaponState>? snapshots) ||
-            !snapshots.TryGetValue(prefabName.Trim(), out OriginalWeaponState snapshot))
-        {
-            return false;
-        }
-
-        attack = SecondaryAttackManager.CloneAttack(snapshot.OriginalSecondaryAttack);
-        return true;
-    }
-
     private sealed class OriginalWeaponState
     {
         public OriginalWeaponState(
-            Attack originalSecondaryAttack,
-            StatusEffect? originalEquipStatusEffect,
+            Attack? originalSecondaryAttack,
             bool originalBuildBlockCharges,
             int originalMaxBlockCharges,
             float originalBlockChargeDecayTime,
@@ -110,7 +101,6 @@ internal static class SecondaryAttackObjectDbStateStore
             HitData.DamageTypes originalDamagesPerLevel)
         {
             OriginalSecondaryAttack = originalSecondaryAttack;
-            OriginalEquipStatusEffect = originalEquipStatusEffect;
             OriginalBuildBlockCharges = originalBuildBlockCharges;
             OriginalMaxBlockCharges = originalMaxBlockCharges;
             OriginalBlockChargeDecayTime = originalBlockChargeDecayTime;
@@ -120,9 +110,7 @@ internal static class SecondaryAttackObjectDbStateStore
             OriginalDamagesPerLevel = originalDamagesPerLevel;
         }
 
-        public Attack OriginalSecondaryAttack { get; }
-
-        public StatusEffect? OriginalEquipStatusEffect { get; }
+        public Attack? OriginalSecondaryAttack { get; }
 
         public bool OriginalBuildBlockCharges { get; }
 

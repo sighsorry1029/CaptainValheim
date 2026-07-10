@@ -7,26 +7,8 @@ internal enum ShieldSpecialMode
     Charge
 }
 
-internal enum SecondaryAttackBehaviorType
+internal sealed class ShieldSpecialSecondaryBehavior
 {
-    EffectOnly,
-    ShieldSpecial
-}
-
-internal abstract class SecondaryAttackBehavior
-{
-    public abstract SecondaryAttackBehaviorType BehaviorType { get; }
-}
-
-internal sealed class EffectOnlySecondaryBehavior : SecondaryAttackBehavior
-{
-    public override SecondaryAttackBehaviorType BehaviorType => SecondaryAttackBehaviorType.EffectOnly;
-}
-
-internal sealed class ShieldSpecialSecondaryBehavior : SecondaryAttackBehavior
-{
-    public override SecondaryAttackBehaviorType BehaviorType => SecondaryAttackBehaviorType.ShieldSpecial;
-
     public bool HasShieldPrimaryAttack { get; set; }
 
     public float ShieldPrimaryAttackDamageFactor { get; set; }

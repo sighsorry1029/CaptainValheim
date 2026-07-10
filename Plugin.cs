@@ -1,15 +1,10 @@
 using System;
 using System.IO;
-using System.Linq;
-using System.Reflection;
-using System.Timers;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
-using JetBrains.Annotations;
 using ServerSync;
-using UnityEngine;
 
 namespace CaptainValheim;
 
@@ -17,12 +12,11 @@ namespace CaptainValheim;
 public class CaptainValheimPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CaptainValheim";
-    internal const string ModVersion = "1.0.4";
+    internal const string ModVersion = "1.0.5";
     internal const string Author = "sighsorry";
     private const string ModGUID = $"{Author}.{ModName}";
     private static string ConfigFileName = $"{ModGUID}.cfg";
     private static string ConfigFileFullPath = Paths.ConfigPath + Path.DirectorySeparatorChar + ConfigFileName;
-    internal static string ConnectionError = "";
     private readonly Harmony _harmony = new(ModGUID);
     public static readonly ManualLogSource ModLogger = BepInEx.Logging.Logger.CreateLogSource(ModName);
     internal static readonly ConfigSync ConfigSync = new(ModGUID) { DisplayName = ModName, CurrentVersion = ModVersion, MinimumRequiredVersion = ModVersion };
@@ -31,7 +25,6 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     private readonly object _reloadLock = new();
     private DateTime _lastConfigReloadTime;
     private string? _lastConfigFileText;
-    private bool _suppressWorldApplySettingChange;
     private const long RELOAD_DELAY = 10000000; // One second
 
     public enum Toggle
@@ -46,7 +39,6 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         Config.SaveOnConfigSet = false;
 
         Settings.Bind(this);
-        RegisterWorldApplySettingHandlers();
         _serverConfigLocked = Settings.General.LockConfiguration;
         _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
         PatchCaptainValheimHooks();
@@ -63,7 +55,6 @@ public class CaptainValheimPlugin : BaseUnityPlugin
 
     private void OnDestroy()
     {
-        UnregisterWorldApplySettingHandlers();
         SecondaryAttackFacade.Dispose();
         SaveWithRespectToConfigSet();
         _watcher?.Dispose();
@@ -105,17 +96,8 @@ public class CaptainValheimPlugin : BaseUnityPlugin
                     return;
                 }
 
-                _suppressWorldApplySettingChange = true;
-                try
-                {
-                    SaveWithRespectToConfigSet(true);
-                }
-                finally
-                {
-                    _suppressWorldApplySettingChange = false;
-                }
+                SaveWithRespectToConfigSet(true);
 
-                SecondaryAttackFacade.RequestCurrentWorldReapply();
                 _lastConfigFileText = ReadFileTextIfExists(ConfigFileFullPath);
                 ModLogger.LogInfo("Configuration reload complete.");
             }
@@ -148,48 +130,7 @@ public class CaptainValheimPlugin : BaseUnityPlugin
 
     private void PatchCaptainValheimHooks()
     {
-        Type[] patchTypes =
-        [
-            typeof(ProjectileUpdateVisualPatch),
-            typeof(ProjectileOnHitPatch),
-            typeof(CharacterAwakeCaptainValheimPatch),
-            typeof(PlayerUpdatePendingConfigPatch),
-            typeof(ObjectDbAwakePatch),
-            typeof(ObjectDbCopyOtherDbPatch),
-            typeof(HumanoidGetCurrentWeaponPatch),
-            typeof(HumanoidPickupThrownShieldPatch),
-            typeof(HumanoidBlockAttackPatch),
-            typeof(HumanoidStartAttackPatch),
-            typeof(AttackOnAttackTriggerPatch),
-            typeof(AttackDoMeleeAttackSecondaryDurabilityFactorPatch),
-            typeof(AttackDoAreaAttackSecondaryDurabilityFactorPatch),
-            typeof(AttackProjectileAttackTriggeredSecondaryDurabilityFactorPatch),
-            typeof(KeyHintsAwakeShieldOnlyPatch),
-            typeof(KeyHintsUpdateShieldOnlyPatch)
-        ];
-
-        foreach (Type patchType in patchTypes)
-        {
-            _harmony.CreateClassProcessor(patchType).Patch();
-        }
-    }
-
-    private void RegisterWorldApplySettingHandlers()
-    {
-    }
-
-    private void UnregisterWorldApplySettingHandlers()
-    {
-    }
-
-    private void OnWorldApplySettingChanged(object? sender, EventArgs e)
-    {
-        if (_suppressWorldApplySettingChange)
-        {
-            return;
-        }
-
-        SecondaryAttackFacade.RequestCurrentWorldReapply();
+        _harmony.PatchAll(typeof(CaptainValheimPlugin).Assembly);
     }
 
     internal sealed class PluginSettings
@@ -223,7 +164,6 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     {
         ConfigDescription extendedDescription = new(description.Description + (synchronizedSetting ? " [Synced with Server]" : " [Not Synced with Server]"), description.AcceptableValues, description.Tags);
         ConfigEntry<T> configEntry = Config.Bind(group, name, value, extendedDescription);
-        //var configEntry = Config.Bind(group, name, value, description);
 
         SyncedConfigEntry<T> syncedConfigEntry = ConfigSync.AddConfigEntry(configEntry);
         syncedConfigEntry.SynchronizedConfig = synchronizedSetting;
@@ -236,53 +176,5 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         return config(group, name, value, new ConfigDescription(description), synchronizedSetting);
     }
 
-    private class ConfigurationManagerAttributes
-    {
-        [UsedImplicitly] public int? Order = null!;
-        [UsedImplicitly] public bool? Browsable = null!;
-        [UsedImplicitly] public string? Category = null!;
-        [UsedImplicitly] public Action<ConfigEntryBase>? CustomDrawer = null!;
-    }
-
-    class AcceptableShortcuts() : AcceptableValueBase(typeof(KeyboardShortcut))
-    {
-        public override object Clamp(object value) => value;
-        public override bool IsValid(object value) => true;
-
-        public override string ToDescriptionString() => $"# Acceptable values: {string.Join(", ", UnityInput.Current.SupportedKeyCodes)}";
-    }
-
     #endregion
-}
-
-public static class KeyboardExtensions
-{
-    extension(KeyboardShortcut shortcut)
-    {
-        public bool IsKeyDown()
-        {
-            return shortcut.MainKey != KeyCode.None && Input.GetKeyDown(shortcut.MainKey) && shortcut.Modifiers.All(Input.GetKey);
-        }
-
-        public bool IsKeyHeld()
-        {
-            return shortcut.MainKey != KeyCode.None && Input.GetKey(shortcut.MainKey) && shortcut.Modifiers.All(Input.GetKey);
-        }
-    }
-}
-
-public static class ToggleExtentions
-{
-    extension(CaptainValheimPlugin.Toggle value)
-    {
-        public bool IsOn()
-        {
-            return value == CaptainValheimPlugin.Toggle.On;
-        }
-
-        public bool IsOff()
-        {
-            return value == CaptainValheimPlugin.Toggle.Off;
-        }
-    }
 }

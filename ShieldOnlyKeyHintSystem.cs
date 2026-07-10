@@ -24,14 +24,6 @@ internal static class ShieldOnlyKeyHintSystem
         UpdateKeyHint(hints, force: true);
     }
 
-    internal static void RefreshKeyHintUi()
-    {
-        if (_activeKeyHints != null)
-        {
-            UpdateKeyHint(_activeKeyHints);
-        }
-    }
-
     internal static void UpdateKeyHint(KeyHints hints, bool force = false)
     {
         if (hints == null)
@@ -40,7 +32,8 @@ internal static class ShieldOnlyKeyHintSystem
         }
 
         _activeKeyHints = hints;
-        if (!ShouldAllowCustomCombatHints(hints))
+        Player? player = Player.m_localPlayer;
+        if (!ShouldShowCustomCombatHints(hints, player))
         {
             HideHints();
             if (hints.m_combatHints != null)
@@ -51,7 +44,7 @@ internal static class ShieldOnlyKeyHintSystem
             return;
         }
 
-        if (!TryBuildHintState(out ShieldHintState state) || !state.HasRows)
+        if (!TryBuildHintState(player!, out ShieldHintState state) || !state.HasRows)
         {
             HideHints();
             RememberHintState(ShieldHintState.Hidden);
@@ -90,21 +83,15 @@ internal static class ShieldOnlyKeyHintSystem
         _showingHints = true;
     }
 
-    private static bool TryBuildHintState(out ShieldHintState state)
+    private static bool TryBuildHintState(Player player, out ShieldHintState state)
     {
         state = ShieldHintState.Hidden;
-        Player? player = Player.m_localPlayer;
-        if (player == null || !ShouldShowCombatHints(player))
-        {
-            return false;
-        }
-
         ItemDrop.ItemData? leftItem = player.GetLeftItem();
         ItemDrop.ItemData? rightItem = player.GetRightItem();
         if (rightItem != null ||
             leftItem?.m_shared?.m_itemType != ItemDrop.ItemData.ItemType.Shield ||
             !SecondaryAttackRuntimeFacade.TryGetDefinition(leftItem, out SecondaryAttackDefinition definition) ||
-            definition.Behavior is not ShieldSpecialSecondaryBehavior shieldBehavior)
+            definition.ShieldSpecial is not { } shieldBehavior)
         {
             return false;
         }
@@ -137,24 +124,11 @@ internal static class ShieldOnlyKeyHintSystem
         }
     }
 
-    private static bool ShouldAllowCustomCombatHints(KeyHints hints)
-    {
-        return hints.m_keyHintsEnabled &&
-               !InventoryGui.IsVisible() &&
-               !Menu.IsVisible() &&
-               !Console.IsVisible() &&
-               !Game.IsPaused() &&
-               (Chat.instance == null || !Chat.instance.HasFocus()) &&
-               (InventoryGui.instance == null ||
-                (!InventoryGui.instance.IsSkillsPanelOpen &&
-                 !InventoryGui.instance.IsTrophisPanelOpen &&
-                 !InventoryGui.instance.IsTextPanelOpen));
-    }
-
-    private static bool ShouldShowCombatHints(Player? player)
+    private static bool ShouldShowCustomCombatHints(KeyHints hints, Player? player)
     {
         return player != null &&
                !player.IsDead() &&
+               hints.m_keyHintsEnabled &&
                !Hud.IsPieceSelectionVisible() &&
                !Hud.InRadial() &&
                !InventoryGui.IsVisible() &&
@@ -163,9 +137,9 @@ internal static class ShieldOnlyKeyHintSystem
                !Game.IsPaused() &&
                (Chat.instance == null || !Chat.instance.HasFocus()) &&
                (InventoryGui.instance == null ||
-                (!InventoryGui.instance.IsSkillsPanelOpen &&
-                 !InventoryGui.instance.IsTrophisPanelOpen &&
-                 !InventoryGui.instance.IsTextPanelOpen)) &&
+                 (!InventoryGui.instance.IsSkillsPanelOpen &&
+                  !InventoryGui.instance.IsTrophisPanelOpen &&
+                  !InventoryGui.instance.IsTextPanelOpen)) &&
                !PlayerCustomizaton.IsBarberGuiVisible() &&
                player.GetDoodadController() == null;
     }
@@ -386,6 +360,6 @@ internal static class KeyHintsUpdateShieldOnlyPatch
 {
     private static void Postfix(KeyHints __instance)
     {
-        ShieldOnlyKeyHintSystem.UpdateKeyHint(__instance, force: true);
+        ShieldOnlyKeyHintSystem.UpdateKeyHint(__instance);
     }
 }

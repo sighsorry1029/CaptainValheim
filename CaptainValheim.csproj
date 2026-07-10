@@ -471,37 +471,27 @@
         <Compile Include="SecondaryAttackAdrenalineSystem.cs" />
         <Compile Include="SecondaryAttackWeaponConfigNormalizer.cs" />
         <Compile Include="SecondaryAttackFacade.cs" />
-        <Compile Include="SecondaryAttackConfigCompiler.cs" />
-        <Compile Include="SecondaryAttackDefinitionBuildContext.cs" />
         <Compile Include="SecondaryAttackDefinitionCompiler.cs" />
         <Compile Include="SecondaryAttackConfig.Normalized.cs" />
-        <Compile Include="SecondaryAttackNormalizedConfigFacade.cs" />
         <Compile Include="SecondaryAttackNormalizedShieldModels.cs" />
         <Compile Include="SecondaryAttackNormalizedWeaponModels.cs" />
         <Compile Include="SecondaryAttackConfig.Raw.cs" />
         <Compile Include="SecondaryAttackBehaviors.cs" />
         <Compile Include="SecondaryAttackDefinition.cs" />
         <Compile Include="SecondaryAttackDefaultYamlResources.cs" />
-        <Compile Include="SecondaryAttackManager.ConfigHelpers.cs" />
-        <Compile Include="SecondaryAttackDefinitionCompiler.Builder.cs" />
-        <Compile Include="SecondaryAttackDefinitionCompiler.Validation.cs" />
         <Compile Include="SecondaryAttackManager.AttackContexts.cs" />
         <Compile Include="SecondaryAttackHarmonyDispatch.cs" />
         <Compile Include="SecondaryAttackStartAttackDispatch.cs" />
         <Compile Include="SecondaryAttackManager.HarmonyHooks.cs" />
-        <Compile Include="SecondaryAttackNetworkCompat.cs" />
         <Compile Include="SecondaryAttackObjectDbStateStore.cs" />
-        <Compile Include="SecondaryAttackManager.ShieldSpecials.cs" />
         <Compile Include="SecondaryAttackManager.ShieldRuntime.cs" />
         <Compile Include="SecondaryAttackManager.cs" />
         <Compile Include="SecondaryAttackRuntimeContext.cs" />
         <Compile Include="SecondaryAttackRuntimeFacade.cs" />
         <Compile Include="SecondaryAttackRuntimeTypes.cs" />
-        <Compile Include="SecondaryAttackWorldApplyContributors.cs" />
         <Compile Include="SecondaryAttackWorldApplySystem.cs" />
         <Compile Include="SecondaryAttackWarningLog.cs" />
         <Compile Include="WarfareTweaksBridge.cs" />
-        <Compile Include="ShieldAccess.cs" />
         <Compile Include="ShieldRuntimeSystem.cs" />
     </ItemGroup>
     <ItemGroup>

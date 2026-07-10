@@ -13,77 +13,51 @@ internal static class SecondaryAttackConfigLoader
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .Build();
 
-    public static void EnsureLocalFilesExist()
+    public static void EnsureLocalFileExists()
     {
-        Directory.CreateDirectory(SecondaryAttackYamlDomainRegistry.ConfigDirectoryPath);
-        foreach (SecondaryAttackYamlDomain domain in SecondaryAttackYamlDomainRegistry.Domains)
+        Directory.CreateDirectory(SecondaryAttackYamlConfig.DirectoryPath);
+        if (!File.Exists(SecondaryAttackYamlConfig.FilePath))
         {
-            if (!File.Exists(domain.FilePath))
-            {
-                File.WriteAllText(domain.FilePath, domain.GetDefaultContents());
-            }
+            File.WriteAllText(
+                SecondaryAttackYamlConfig.FilePath,
+                SecondaryAttackDefaultYamlResources.Load(SecondaryAttackYamlConfig.FileName));
         }
     }
 
-    public static SecondaryAttackYamlTexts ReadLocalYamlTexts()
+    public static string ReadLocalYamlText()
     {
-        Dictionary<SecondaryAttackYamlDomainId, string> texts = new();
-        foreach (SecondaryAttackYamlDomain domain in SecondaryAttackYamlDomainRegistry.Domains)
-        {
-            texts[domain.Id] = File.ReadAllText(domain.FilePath);
-        }
-
-        return new SecondaryAttackYamlTexts(texts);
+        return File.ReadAllText(SecondaryAttackYamlConfig.FilePath);
     }
 
     public static bool TryCompileSnapshot(
-        int snapshotId,
-        SecondaryAttackYamlTexts yamlTexts,
+        string yamlText,
         out SecondaryAttackCompiledSnapshot? snapshot)
     {
         snapshot = null;
-        if (!TryParseYamlTexts(yamlTexts, out SecondaryAttackParsedYaml? parsedYaml))
+        if (!TryParseDictionary(yamlText, out Dictionary<string, ShieldWeaponConfig>? shields))
         {
             return false;
         }
 
-        snapshot = SecondaryAttackConfigCompiler.Compile(snapshotId, parsedYaml!);
+        snapshot = new SecondaryAttackCompiledSnapshot(
+            SecondaryAttackWeaponConfigNormalizer.Normalize(shields!));
         return true;
     }
 
-    private static bool TryParseYamlTexts(SecondaryAttackYamlTexts yamlTexts, out SecondaryAttackParsedYaml? parsedYaml)
-    {
-        parsedYaml = null;
-        if (!TryParseDictionary<ShieldWeaponConfig>(
-                SecondaryAttackYamlDomainId.Shields,
-                yamlTexts.Get(SecondaryAttackYamlDomainId.Shields),
-                out Dictionary<string, ShieldWeaponConfig>? shields))
-        {
-            return false;
-        }
-
-        parsedYaml = new SecondaryAttackParsedYaml
-        {
-            Shields = shields!
-        };
-        return true;
-    }
-
-    private static bool TryParseDictionary<T>(
-        SecondaryAttackYamlDomainId domainId,
+    private static bool TryParseDictionary(
         string yamlText,
-        out Dictionary<string, T>? parsed)
+        out Dictionary<string, ShieldWeaponConfig>? parsed)
     {
         parsed = null;
         if (string.IsNullOrWhiteSpace(yamlText))
         {
-            parsed = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            parsed = new Dictionary<string, ShieldWeaponConfig>(StringComparer.OrdinalIgnoreCase);
             return true;
         }
 
         try
         {
-            parsed = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            parsed = new Dictionary<string, ShieldWeaponConfig>(StringComparer.OrdinalIgnoreCase);
             YamlStream stream = new();
             stream.Load(new StringReader(yamlText));
             if (stream.Documents.Count == 0 ||
@@ -92,7 +66,6 @@ internal static class SecondaryAttackConfigLoader
                 return true;
             }
 
-            SecondaryAttackYamlDomain domain = SecondaryAttackYamlDomainRegistry.Get(domainId);
             foreach (KeyValuePair<YamlNode, YamlNode> entry in root.Children)
             {
                 string rootKey = (entry.Key as YamlScalarNode)?.Value?.Trim() ?? "";
@@ -103,11 +76,13 @@ internal static class SecondaryAttackConfigLoader
 
                 try
                 {
-                    parsed[rootKey] = DeserializeYamlNode<T>(entry.Value) ?? Activator.CreateInstance<T>();
+                    parsed[rootKey] =
+                        DeserializeYamlNode(entry.Value) ?? new ShieldWeaponConfig();
                 }
                 catch (Exception entryException)
                 {
-                    CaptainValheimPlugin.ModLogger.LogWarning($"Skipping {domain.FileName} block '{rootKey}': {entryException.Message}");
+                    CaptainValheimPlugin.ModLogger.LogWarning(
+                        $"Skipping {SecondaryAttackYamlConfig.FileName} block '{rootKey}': {entryException.Message}");
                 }
             }
 
@@ -115,17 +90,17 @@ internal static class SecondaryAttackConfigLoader
         }
         catch (Exception exception)
         {
-            SecondaryAttackYamlDomain domain = SecondaryAttackYamlDomainRegistry.Get(domainId);
-            CaptainValheimPlugin.ModLogger.LogError($"Failed to parse {domain.FileName}: {exception.Message}");
+            CaptainValheimPlugin.ModLogger.LogError(
+                $"Failed to parse {SecondaryAttackYamlConfig.FileName}: {exception.Message}");
             return false;
         }
     }
 
-    private static T? DeserializeYamlNode<T>(YamlNode node)
+    private static ShieldWeaponConfig? DeserializeYamlNode(YamlNode node)
     {
         using StringWriter writer = new();
         YamlStream stream = new(new YamlDocument(node));
         stream.Save(writer, assignAnchors: false);
-        return Deserializer.Deserialize<T>(writer.ToString());
+        return Deserializer.Deserialize<ShieldWeaponConfig>(writer.ToString());
     }
 }

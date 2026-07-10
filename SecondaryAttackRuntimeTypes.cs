@@ -15,33 +15,6 @@ internal sealed class ActiveSecondaryAttack
     public ShieldSpecialMode ShieldMode { get; }
 
     public bool Triggered { get; set; }
-
-    public bool ProjectileTriggered { get; set; }
-
-    public float NextHoldRepeatTime { get; set; }
-}
-
-internal sealed class ProjectileAttackAttribution
-{
-    public ProjectileAttackAttribution(
-        string weaponPrefabName,
-        bool secondaryAttack,
-        SecondaryAttackDefinition? definition,
-        bool disableCurrentAttackFallback)
-    {
-        WeaponPrefabName = weaponPrefabName;
-        SecondaryAttack = secondaryAttack;
-        Definition = definition;
-        DisableCurrentAttackFallback = disableCurrentAttackFallback;
-    }
-
-    public string WeaponPrefabName { get; }
-
-    public bool SecondaryAttack { get; }
-
-    public SecondaryAttackDefinition? Definition { get; }
-
-    public bool DisableCurrentAttackFallback { get; }
 }
 
 internal readonly struct ProjectileHitContext
@@ -51,15 +24,13 @@ internal readonly struct ProjectileHitContext
         Collider collider,
         Vector3 hitPoint,
         bool water,
-        Vector3 normal,
-        ProjectileAttackAttribution? attribution)
+        Vector3 normal)
     {
         Projectile = projectile;
         Collider = collider;
         HitPoint = hitPoint;
         Water = water;
         Normal = normal;
-        Attribution = attribution;
     }
 
     public Projectile Projectile { get; }
@@ -71,6 +42,4 @@ internal readonly struct ProjectileHitContext
     public bool Water { get; }
 
     public Vector3 Normal { get; }
-
-    public ProjectileAttackAttribution? Attribution { get; }
 }

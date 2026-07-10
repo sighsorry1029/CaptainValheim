@@ -1,3 +1,4 @@
+using System;
 using HarmonyLib;
 using UnityEngine;
 
@@ -71,15 +72,17 @@ internal static class ProjectileOnHitPatch
     }
 
     [HarmonyPriority(Priority.First)]
-    private static void Postfix(
-        Projectile __instance,
-        Collider collider,
-        Vector3 hitPoint,
-        bool water,
-        Vector3 normal,
-        SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
+    private static void Postfix(ref SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
     {
-        SecondaryAttackHarmonyDispatch.ProjectileOnHitPostfix(__instance, collider, hitPoint, water, normal, __state);
+        SecondaryAttackHarmonyDispatch.EndProjectileOnHit(ref __state);
+    }
+
+    private static Exception? Finalizer(
+        Exception? __exception,
+        ref SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
+    {
+        SecondaryAttackHarmonyDispatch.EndProjectileOnHit(ref __state);
+        return __exception;
     }
 }
 
@@ -88,7 +91,7 @@ internal static class CharacterAwakeCaptainValheimPatch
 {
     private static void Postfix(Character __instance)
     {
-        if (__instance.GetComponent<ZNetView>() == null)
+        if (__instance is not Player || __instance.GetComponent<ZNetView>() == null)
         {
             return;
         }
@@ -103,9 +106,9 @@ internal static class CharacterAwakeCaptainValheimPatch
 [HarmonyPatch(typeof(Player), "Update")]
 internal static class PlayerUpdatePendingConfigPatch
 {
-    private static void Postfix(Player __instance, bool ___m_attackHold, bool ___m_secondaryAttackHold, bool ___m_secondaryAttack, ref bool ___m_blocking)
+    private static void Postfix(Player __instance)
     {
-        SecondaryAttackHarmonyDispatch.PlayerUpdatePostfix(__instance, ___m_attackHold, ___m_secondaryAttackHold, ___m_secondaryAttack, ref ___m_blocking);
+        SecondaryAttackHarmonyDispatch.PlayerUpdatePostfix(__instance);
     }
 }
 
@@ -193,25 +196,25 @@ internal static class HumanoidStartAttackPatch
         bool secondaryAttack,
         ref bool __result,
         ItemDrop.ItemData ___m_leftItem,
-        ItemDrop.ItemData ___m_rightItem,
-        out SecondaryAttackStartAttackDispatch.StartAttackState __state)
+        ItemDrop.ItemData ___m_rightItem)
     {
         return SecondaryAttackStartAttackDispatch.Prefix(
             __instance,
             secondaryAttack,
             ref __result,
             ___m_leftItem,
-            ___m_rightItem,
-            out __state);
+            ___m_rightItem);
     }
 
-    private static void Postfix(
-        Humanoid __instance,
-        bool secondaryAttack,
-        bool __result,
-        SecondaryAttackStartAttackDispatch.StartAttackState __state)
+    private static void Postfix(Humanoid __instance, bool __result)
     {
-        SecondaryAttackStartAttackDispatch.Postfix(__instance, secondaryAttack, __result, __state);
+        SecondaryAttackStartAttackDispatch.Postfix(__instance, __result);
+    }
+
+    private static Exception? Finalizer(Exception? __exception, Humanoid __instance)
+    {
+        SecondaryAttackStartAttackDispatch.Finalize(__instance);
+        return __exception;
     }
 }
 
@@ -219,14 +222,24 @@ internal static class HumanoidStartAttackPatch
 internal static class AttackOnAttackTriggerPatch
 {
     [HarmonyPriority(Priority.First)]
-    private static bool Prefix(Attack __instance)
+    private static bool Prefix(
+        Attack __instance,
+        out ShieldRuntimeSystem.ShieldPrimaryTriggerState __state)
     {
-        return !SecondaryAttackRuntimeFacade.TryHandleCustomAttackTrigger(__instance);
+        return !SecondaryAttackRuntimeFacade.TryHandleCustomAttackTrigger(__instance, out __state);
     }
 
-    private static void Postfix()
+    private static void Postfix(ref ShieldRuntimeSystem.ShieldPrimaryTriggerState __state)
     {
-        ShieldRuntimeSystem.EndShieldPrimaryVanillaTrigger();
+        ShieldRuntimeSystem.EndShieldPrimaryVanillaTrigger(ref __state);
+    }
+
+    private static Exception? Finalizer(
+        Exception? __exception,
+        ref ShieldRuntimeSystem.ShieldPrimaryTriggerState __state)
+    {
+        ShieldRuntimeSystem.EndShieldPrimaryVanillaTrigger(ref __state);
+        return __exception;
     }
 }
 
@@ -238,9 +251,17 @@ internal static class AttackDoMeleeAttackSecondaryDurabilityFactorPatch
         __state = SecondaryAttackManager.BeginSecondaryAttackDurabilityAdjustment(__instance);
     }
 
-    private static void Postfix(SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
+    private static void Postfix(ref SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
     {
-        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(__state);
+        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(ref __state);
+    }
+
+    private static Exception? Finalizer(
+        Exception? __exception,
+        ref SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
+    {
+        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(ref __state);
+        return __exception;
     }
 }
 
@@ -252,9 +273,17 @@ internal static class AttackDoAreaAttackSecondaryDurabilityFactorPatch
         __state = SecondaryAttackManager.BeginSecondaryAttackDurabilityAdjustment(__instance);
     }
 
-    private static void Postfix(SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
+    private static void Postfix(ref SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
     {
-        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(__state);
+        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(ref __state);
+    }
+
+    private static Exception? Finalizer(
+        Exception? __exception,
+        ref SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
+    {
+        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(ref __state);
+        return __exception;
     }
 }
 
@@ -266,8 +295,16 @@ internal static class AttackProjectileAttackTriggeredSecondaryDurabilityFactorPa
         __state = SecondaryAttackManager.BeginSecondaryAttackDurabilityAdjustment(__instance);
     }
 
-    private static void Postfix(SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
+    private static void Postfix(ref SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
     {
-        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(__state);
+        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(ref __state);
+    }
+
+    private static Exception? Finalizer(
+        Exception? __exception,
+        ref SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
+    {
+        SecondaryAttackManager.EndSecondaryAttackDurabilityAdjustment(ref __state);
+        return __exception;
     }
 }

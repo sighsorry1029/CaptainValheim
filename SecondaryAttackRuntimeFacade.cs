@@ -13,31 +13,6 @@ internal static class SecondaryAttackRuntimeFacade
         return SecondaryAttackFacade.CurrentAppliedWorldSnapshot.DefinitionsByPrefabName.TryGetValue(weapon.m_dropPrefab.name, out definition!);
     }
 
-    internal static bool TryGetDefinition(string weaponPrefabName, out SecondaryAttackDefinition definition)
-    {
-        return SecondaryAttackFacade.CurrentAppliedWorldSnapshot.DefinitionsByPrefabName.TryGetValue(weaponPrefabName, out definition!);
-    }
-
-    internal static bool TryGetCurrentWeaponDefinition(out SecondaryAttackDefinition definition, out bool secondaryAttack)
-    {
-        definition = null!;
-        secondaryAttack = false;
-        Player? localPlayer = Player.m_localPlayer;
-        if (localPlayer == null)
-        {
-            return false;
-        }
-
-        Attack? currentAttack = ((Humanoid)localPlayer).m_currentAttack;
-        if (currentAttack?.m_weapon?.m_dropPrefab == null)
-        {
-            return false;
-        }
-
-        secondaryAttack = ((Humanoid)localPlayer).m_currentAttackIsSecondary;
-        return SecondaryAttackFacade.CurrentAppliedWorldSnapshot.DefinitionsByPrefabName.TryGetValue(currentAttack.m_weapon.m_dropPrefab.name, out definition!);
-    }
-
     internal static bool BeginProjectileHitContext(Projectile projectile, UnityEngine.Collider collider, UnityEngine.Vector3 hitPoint, bool water, UnityEngine.Vector3 normal)
     {
         if (projectile == null || collider == null)
@@ -45,8 +20,7 @@ internal static class SecondaryAttackRuntimeFacade
             return false;
         }
 
-        SecondaryAttackRuntimeContext.TryGetProjectileAttackAttribution(projectile, out ProjectileAttackAttribution? attribution);
-        SecondaryAttackRuntimeContext.PushProjectileHitContext(new ProjectileHitContext(projectile, collider, hitPoint, water, normal, attribution));
+        SecondaryAttackRuntimeContext.PushProjectileHitContext(new ProjectileHitContext(projectile, collider, hitPoint, water, normal));
         return true;
     }
 
@@ -61,7 +35,7 @@ internal static class SecondaryAttackRuntimeFacade
     internal static void RegisterActiveAttack(Attack attack, ItemDrop.ItemData weapon, ShieldSpecialMode shieldMode = ShieldSpecialMode.Throw)
     {
         if (!TryGetDefinition(weapon, out SecondaryAttackDefinition definition) ||
-            definition.BehaviorType != SecondaryAttackBehaviorType.ShieldSpecial)
+            definition.ShieldSpecial == null)
         {
             return;
         }
@@ -75,11 +49,14 @@ internal static class SecondaryAttackRuntimeFacade
         }
     }
 
-    internal static bool TryHandleCustomAttackTrigger(Attack attack)
+    internal static bool TryHandleCustomAttackTrigger(
+        Attack attack,
+        out ShieldRuntimeSystem.ShieldPrimaryTriggerState primaryTriggerState)
     {
+        primaryTriggerState = default;
         if (!SecondaryAttackRuntimeContext.TryGetActiveAttack(attack, out ActiveSecondaryAttack? activeAttack) ||
             activeAttack == null ||
-            activeAttack.Definition.BehaviorType != SecondaryAttackBehaviorType.ShieldSpecial)
+            activeAttack.Definition.ShieldSpecial == null)
         {
             return false;
         }
@@ -91,7 +68,7 @@ internal static class SecondaryAttackRuntimeFacade
 
         if (activeAttack.ShieldMode == ShieldSpecialMode.PrimaryAttack)
         {
-            ShieldRuntimeSystem.BeginShieldPrimaryVanillaTrigger(attack, activeAttack);
+            ShieldRuntimeSystem.BeginShieldPrimaryVanillaTrigger(attack, activeAttack, out primaryTriggerState);
             return false;
         }
 
