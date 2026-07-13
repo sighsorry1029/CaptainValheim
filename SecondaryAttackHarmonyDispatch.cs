@@ -24,16 +24,7 @@ internal static class SecondaryAttackHarmonyDispatch
         }
 
         state.RuntimeContext = SecondaryAttackRuntimeFacade.BeginProjectileHitContext(projectile, collider, hitPoint, water, normal);
-        try
-        {
-            SecondaryAttackManager.TrySendShieldReflectRequest(projectile, collider, hitPoint, water, normal);
-            return true;
-        }
-        catch
-        {
-            EndProjectileOnHit(ref state);
-            throw;
-        }
+        return true;
     }
 
     internal static void EndProjectileOnHit(ref ProjectileOnHitState state)

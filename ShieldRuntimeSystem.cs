@@ -12,6 +12,7 @@ internal static partial class ShieldRuntimeSystem
     private const string ShieldThrowProjectileMarkerKey = "CaptainValheim_ShieldThrowProjectile";
     private const string ShieldThrowProjectileVisualRootName = "CaptainValheim_ShieldThrowVisualRoot";
     private const string ThrownShieldPickupMarkerKey = "CaptainValheim_ThrownShieldPickup";
+    private const string ReflectedProjectileMarkerKey = "CaptainValheim_ReflectedProjectile";
     private const string ShieldThrowImpactAoePrefabName = "Catapult_Ammo_Projectile_AOE";
     private const string ShieldThrowImpactSfxChildName = "sfx";
     private const string ArrowHitSfxPrefabName = "sfx_arrow_hit";
@@ -443,7 +444,21 @@ internal static partial class ShieldRuntimeSystem
 
     internal static bool IsReflectedProjectile(Projectile projectile)
     {
-        return projectile != null && ReflectedProjectiles.TryGetValue(projectile, out _);
+        if (projectile == null)
+        {
+            return false;
+        }
+
+        if (ReflectedProjectiles.TryGetValue(projectile, out _))
+        {
+            return true;
+        }
+
+        ZNetView? nview = projectile.GetComponent<ZNetView>();
+        return nview != null &&
+               nview.IsValid() &&
+               nview.GetZDO() != null &&
+               nview.GetZDO().GetBool(ReflectedProjectileMarkerKey, false);
     }
 
     internal static void MarkReflectedProjectile(Projectile projectile)
@@ -455,6 +470,12 @@ internal static partial class ShieldRuntimeSystem
 
         ReflectedProjectiles.Remove(projectile);
         ReflectedProjectiles.Add(projectile, new ReflectedProjectileState());
+
+        ZNetView? nview = projectile.GetComponent<ZNetView>();
+        if (nview != null && nview.IsValid() && nview.IsOwner() && nview.GetZDO() != null)
+        {
+            nview.GetZDO().Set(ReflectedProjectileMarkerKey, true);
+        }
     }
 
     internal static bool IsShieldChargeActive(Humanoid humanoid)

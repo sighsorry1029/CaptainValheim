@@ -61,11 +61,6 @@ internal static partial class SecondaryAttackManager
         return nview != null && nview.IsValid() && zdo != null;
     }
 
-    internal static float GetNetworkTimeSeconds()
-    {
-        return ZNet.instance != null ? (float)ZNet.instance.GetTimeSeconds() : Time.time;
-    }
-
     internal static void PlayTriggeredAttackEffects(Attack attack, float durabilityFactor)
     {
         DrainAttackDurability(attack, durabilityFactor);

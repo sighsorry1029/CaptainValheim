@@ -6,7 +6,7 @@ namespace CaptainValheim;
 
 internal sealed class CaptainValheimCharacterRpc : MonoBehaviour
 {
-    private const string ShieldReflectRequestRpcName = "CaptainValheim_RequestShieldReflect";
+    private const string ShieldReflectDamageRpcName = "CaptainValheim_DeliverShieldReflectDamageV2";
 
     private Character _character = null!;
     private ZNetView? _nview;
@@ -20,25 +20,32 @@ internal sealed class CaptainValheimCharacterRpc : MonoBehaviour
             return;
         }
 
-        _nview.Register<ZDOID, Vector3, Vector3, string>(ShieldReflectRequestRpcName, RPC_RequestShieldReflect);
-    }
-
-    internal static void SendShieldReflectRequest(ZNetView targetNView, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, string payload)
-    {
-        targetNView.InvokeRPC(ShieldReflectRequestRpcName, projectileId, hitPoint, normal, payload);
-    }
-
-    private void RPC_RequestShieldReflect(long sender, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, string payload)
-    {
-        if (_character is not Player player || _nview == null || !_nview.IsValid() || !_nview.IsOwner())
+        _nview.Register<ZPackage>(ShieldReflectDamageRpcName, RPC_ShieldReflectDamage);
+        if (_character is Player player)
         {
-            SecondaryAttackManager.LogShieldReflectDebug(
-                "rpc.skip.notOwner",
-                () => $"rpc.skip reason=not-owner-or-not-player sender={sender} projectile={projectileId} frame={Time.frameCount}");
-            return;
+            SecondaryAttackManager.AdvertiseShieldReflectProtocol(player, _nview);
         }
+    }
 
-        SecondaryAttackManager.StorePendingShieldReflectContext(player, projectileId, hitPoint, normal, payload);
+    private void Start()
+    {
+        if (_character is Player player)
+        {
+            SecondaryAttackManager.AdvertiseShieldReflectProtocol(player, _nview);
+        }
+    }
+
+    internal static void SendShieldReflectDamage(ZNetView targetNView, ZPackage package)
+    {
+        targetNView.InvokeRPC(ShieldReflectDamageRpcName, package);
+    }
+
+    private void RPC_ShieldReflectDamage(long sender, ZPackage package)
+    {
+        if (_character is Player player)
+        {
+            SecondaryAttackManager.ReceiveRemoteShieldReflectDamage(player, _nview, sender, package);
+        }
     }
 }
 
@@ -60,6 +67,7 @@ internal static class ProjectileUpdateVisualPatch
 internal static class ProjectileOnHitPatch
 {
     [HarmonyPriority(Priority.Last)]
+    [HarmonyBefore("sighsorry.SecondaryAttacks")]
     private static bool Prefix(
         Projectile __instance,
         Collider collider,
@@ -72,16 +80,70 @@ internal static class ProjectileOnHitPatch
     }
 
     [HarmonyPriority(Priority.First)]
+    [HarmonyAfter("sighsorry.SecondaryAttacks")]
     private static void Postfix(ref SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
     {
         SecondaryAttackHarmonyDispatch.EndProjectileOnHit(ref __state);
     }
 
+    [HarmonyAfter("sighsorry.SecondaryAttacks")]
     private static Exception? Finalizer(
         Exception? __exception,
         ref SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
     {
         SecondaryAttackHarmonyDispatch.EndProjectileOnHit(ref __state);
+        return __exception;
+    }
+}
+
+[HarmonyPatch(typeof(Character), nameof(Character.Damage))]
+internal static class CharacterDamageShieldReflectRoutePatch
+{
+    [HarmonyPriority(Priority.Last)]
+    private static bool Prefix(
+        Character __instance,
+        HitData hit,
+        bool __runOriginal,
+        out SecondaryAttackManager.ShieldReflectCharacterDamageState __state)
+    {
+        __state = default;
+        return !__runOriginal ||
+               !SecondaryAttackManager.BeginShieldReflectCharacterDamage(__instance, hit, out __state);
+    }
+
+    [HarmonyPriority(Priority.First)]
+    private static void Postfix(ref SecondaryAttackManager.ShieldReflectCharacterDamageState __state)
+    {
+        SecondaryAttackManager.EndShieldReflectCharacterDamage(ref __state);
+    }
+
+    private static Exception? Finalizer(
+        Exception? __exception,
+        ref SecondaryAttackManager.ShieldReflectCharacterDamageState __state)
+    {
+        SecondaryAttackManager.EndShieldReflectCharacterDamage(ref __state);
+        return __exception;
+    }
+}
+
+[HarmonyPatch(typeof(Character), "RPC_Damage")]
+internal static class CharacterRpcDamageShieldReflectScopePatch
+{
+    [HarmonyPriority(Priority.First)]
+    private static void Prefix(
+        Character __instance,
+        ref long sender,
+        HitData hit,
+        out SecondaryAttackManager.ShieldReflectRpcDamageState __state)
+    {
+        SecondaryAttackManager.BeginShieldReflectRpcDamage(__instance, ref sender, hit, out __state);
+    }
+
+    private static Exception? Finalizer(
+        Exception? __exception,
+        ref SecondaryAttackManager.ShieldReflectRpcDamageState __state)
+    {
+        SecondaryAttackManager.EndShieldReflectRpcDamage(ref __state);
         return __exception;
     }
 }
@@ -168,23 +230,53 @@ internal static class HumanoidPickupThrownShieldPatch
 [HarmonyPatch(typeof(Humanoid), "BlockAttack")]
 internal static class HumanoidBlockAttackPatch
 {
-    private static void Prefix(Humanoid __instance, HitData hit, ItemDrop.ItemData ___m_leftItem, float ___m_blockTimer, out SecondaryAttackManager.BlockAttackContext __state)
+    [HarmonyPriority(Priority.Last)]
+    private static void Prefix(Humanoid __instance, HitData hit, ItemDrop.ItemData ___m_leftItem, out SecondaryAttackManager.BlockAttackContext __state)
     {
-        __state = SecondaryAttackManager.CaptureBlockAttackContext(__instance, hit, ___m_leftItem, ___m_blockTimer);
+        __state = SecondaryAttackManager.CaptureBlockAttackContext(__instance, hit, ___m_leftItem);
     }
 
-    private static void Postfix(Humanoid __instance, bool __result, HitData hit, SecondaryAttackManager.BlockAttackContext __state)
+    [HarmonyPriority(Priority.First)]
+    private static void Postfix(bool __result, HitData hit, ref SecondaryAttackManager.BlockAttackContext __state)
     {
-        SecondaryAttackManager.FinalizeBlockAttack(__instance, __result, hit, __state);
+        try
+        {
+            SecondaryAttackManager.FinalizeBlockAttack(__result, hit, __state);
+        }
+        catch (Exception exception)
+        {
+            SecondaryAttackManager.LogShieldReflectDebug(
+                "block.finalizeException",
+                () => $"block.finalize.skip reason={exception.GetType().Name} frame={Time.frameCount}");
+        }
+        finally
+        {
+            SecondaryAttackManager.EndShieldReflectBlockAttack(ref __state);
+        }
+    }
+
+    private static Exception? Finalizer(
+        Exception? __exception,
+        ref SecondaryAttackManager.BlockAttackContext __state)
+    {
+        SecondaryAttackManager.EndShieldReflectBlockAttack(ref __state);
+        return __exception;
     }
 }
 
-[HarmonyPatch(typeof(Character), "OnDestroy")]
-internal static class CharacterOnDestroyShieldReflectStatePatch
+[HarmonyPatch(typeof(HitData), nameof(HitData.BlockDamage))]
+internal static class HitDataBlockDamageShieldReflectPatch
 {
-    private static void Prefix(Character __instance)
+    [HarmonyPriority(Priority.Last)]
+    private static void Prefix(HitData __instance, out float __state)
     {
-        SecondaryAttackManager.ForgetShieldReflectState(__instance);
+        __state = __instance.GetTotalBlockableDamage();
+    }
+
+    [HarmonyPriority(Priority.Last)]
+    private static void Postfix(HitData __instance, float __state)
+    {
+        SecondaryAttackManager.RecordShieldReflectBlockDamage(__instance, __state);
     }
 }
 

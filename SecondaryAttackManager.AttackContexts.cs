@@ -1,200 +1,332 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using UnityEngine;
 
 namespace CaptainValheim;
 
 internal static partial class SecondaryAttackManager
 {
-    private const float ShieldReflectPendingContextLifetime = 1f;
-    private const float ShieldReflectPendingBlockLifetime = 1f;
-    private const float ShieldReflectPendingHitPointMaxDistanceSqr = 25f;
-    private const int ShieldReflectMaxPendingContextsPerPlayer = 8;
-    private const int ShieldReflectMaxPendingBlocksPerPlayer = 8;
-    private const float ShieldReflectDebugThrottleSeconds = 0.5f;
-    private static readonly Dictionary<ZDOID, PendingShieldReflectState> ShieldReflectPendingContexts = new();
-    private static readonly Dictionary<ZDOID, PendingShieldReflectBlockState> ShieldReflectPendingBlocks = new();
-    private static readonly Dictionary<string, float> ShieldReflectDebugNextLogTimes = new(StringComparer.Ordinal);
+    private const int ShieldReflectProtocolVersion = 2;
+    private const string ShieldReflectProtocolZdoKey = "CaptainValheim_ShieldReflectProtocol";
+    private const int ShieldReflectDeliveredEventLimit = 512;
+
+    private static readonly HashSet<ShieldReflectEventKey> DeliveredShieldReflectEvents = new();
+    private static readonly List<ShieldReflectEventKey> DeliveredShieldReflectEventOrder = new(ShieldReflectDeliveredEventLimit);
+    private static readonly List<ShieldReflectDamageScope> ActiveShieldReflectDamageScopes = new(2);
+    private static readonly List<BlockAttackContext> ActiveShieldReflectBlockAttackContexts = new(2);
+    private static long NextShieldReflectEventId;
 
     internal sealed class BlockAttackContext
     {
         public Player? Player { get; set; }
+
         public ItemDrop.ItemData? Blocker { get; set; }
+
         public SecondaryAttackDefinition? Definition { get; set; }
+
         public ShieldReflectProjectileContext? ProjectileContext { get; set; }
+
         public string ProjectileContextSource { get; set; } = string.Empty;
-        public float VanillaBlockStaminaCost { get; set; }
+
+        public float StaminaBefore { get; set; }
+
+        public HitData? Hit { get; set; }
+
+        public float BlockedDamage { get; set; }
     }
 
-    private readonly struct BlockCostAnalysis
+    internal struct ShieldReflectCharacterDamageState
     {
-        public BlockCostAnalysis(float staminaCost)
-        {
-            StaminaCost = staminaCost;
-        }
+        internal ShieldReflectDamageScope? Scope { get; set; }
 
-        public float StaminaCost { get; }
+        internal ShieldReflectCharacterDamageState(ShieldReflectDamageScope scope)
+        {
+            Scope = scope;
+        }
     }
 
-    internal static void TrySendShieldReflectRequest(Projectile projectile, Collider collider, Vector3 hitPoint, bool water, Vector3 normal)
+    internal struct ShieldReflectRpcDamageState
     {
-        if (projectile == null || collider == null || water || !projectile.m_blockable || ShieldRuntimeSystem.IsReflectedProjectile(projectile))
+        internal ShieldReflectDamageScope? Scope { get; set; }
+
+        internal HitData? Hit { get; set; }
+
+        internal ShieldReflectRpcDamageState(ShieldReflectDamageScope scope, HitData hit)
+        {
+            Scope = scope;
+            Hit = hit;
+        }
+    }
+
+    internal static void AdvertiseShieldReflectProtocol(Player player, ZNetView? nview)
+    {
+        if (player == null || nview == null || !nview.IsValid() || !nview.IsOwner() || nview.GetZDO() == null)
         {
             return;
         }
 
-        if (GetHitCharacter(collider) is not Player targetPlayer)
+        ZDO zdo = nview.GetZDO();
+        if (zdo.GetInt(ShieldReflectProtocolZdoKey, 0) != ShieldReflectProtocolVersion)
         {
-            return;
+            zdo.Set(ShieldReflectProtocolZdoKey, ShieldReflectProtocolVersion);
         }
+    }
 
-        if (!TryGetProjectileZdo(projectile, out ZNetView? projectileNView, out ZDO? projectileZdo))
+    internal static bool BeginShieldReflectCharacterDamage(
+        Character target,
+        HitData hit,
+        out ShieldReflectCharacterDamageState state)
+    {
+        state = default;
+        try
         {
+            return BeginShieldReflectCharacterDamageCore(target, hit, out state);
+        }
+        catch (Exception exception)
+        {
+            EndShieldReflectCharacterDamage(ref state);
             LogShieldReflectDebug(
-                "request.skip.projectileZdo",
-                () => $"request.skip reason=no-projectile-zdo projectile={projectile.name} target={targetPlayer.name} frame={Time.frameCount}");
-            return;
+                "route.constructionFallback",
+                () => $"route.fallback reason={exception.GetType().Name} target={target?.name ?? "<null>"} frame={Time.frameCount}");
+            return false;
         }
+    }
 
-        if (!projectileNView!.IsOwner())
+    private static bool BeginShieldReflectCharacterDamageCore(
+        Character target,
+        HitData hit,
+        out ShieldReflectCharacterDamageState state)
+    {
+        state = default;
+        if (target is not Player targetPlayer || hit == null || !hit.m_blockable)
         {
-            LogShieldReflectDebug(
-                "request.skip.projectileOwner",
-                () => $"request.skip reason=not-projectile-owner projectile={projectile.name} projectileId={projectileZdo!.m_uid} target={targetPlayer.name} frame={Time.frameCount}");
-            return;
+            return false;
         }
 
-        ZDOID projectileId = projectileZdo!.m_uid;
+        if (!SecondaryAttackRuntimeContext.TryPeekProjectileHitContext(out ProjectileHitContext? activeContext) ||
+            !activeContext.HasValue)
+        {
+            return false;
+        }
+
+        ProjectileHitContext projectileHit = activeContext.Value;
+        Projectile projectile = projectileHit.Projectile;
+        if (projectile == null ||
+            projectileHit.Water ||
+            hit.m_hitCollider == null ||
+            GetHitCharacter(hit.m_hitCollider) != targetPlayer ||
+            ShieldRuntimeSystem.IsReflectedProjectile(projectile))
+        {
+            return false;
+        }
+
+        if (!TryGetProjectileZdo(projectile, out ZNetView? projectileNView, out ZDO? projectileZdo) ||
+            !projectileNView!.IsOwner())
+        {
+            return false;
+        }
+
+        long projectileOwnerPeerId = projectileZdo!.GetOwner();
+        if (projectileOwnerPeerId == 0L || projectileOwnerPeerId != ZDOMan.GetSessionID())
+        {
+            return false;
+        }
+
+        if (!TryGetCharacterZdo(targetPlayer, out ZNetView? targetNView, out ZDO? targetZdo) ||
+            targetZdo!.m_uid == ZDOID.None ||
+            targetZdo.GetOwner() == 0L)
+        {
+            return false;
+        }
+
+        ZDOID projectileId = projectileZdo.m_uid;
         if (projectileId == ZDOID.None)
         {
-            return;
+            return false;
         }
 
-        if (!TryGetCharacterZdo(targetPlayer, out ZNetView? targetNView, out ZDO? targetZdo))
+        Vector3 normal = projectileHit.Normal;
+        if (normal.sqrMagnitude <= 0.001f)
         {
-            LogShieldReflectDebug(
-                "request.skip.targetZdo",
-                () => $"request.skip reason=no-target-zdo projectile={projectile.name} projectileId={projectileId} target={targetPlayer.name} frame={Time.frameCount}");
-            return;
+            Vector3 velocity = ProjectileAccess.GetVelocity(projectile);
+            normal = velocity.sqrMagnitude > 0.001f ? -velocity.normalized : -targetPlayer.GetLookDir();
+        }
+
+        hit.m_weakSpot = targetPlayer.FindWeakSpotIndex(hit.m_hitCollider);
+        ShieldReflectProjectileContext snapshot = ShieldReflectProjectileContext.FromProjectile(
+            projectile,
+            hit.m_point,
+            water: false,
+            normal);
+        if (!snapshot.IsValid)
+        {
+            return false;
         }
 
         if (targetNView!.IsOwner())
         {
-            LogShieldReflectDebug(
-                "request.skip.localTarget",
-                () => $"request.skip reason=local-target-context projectile={projectile.name} projectileId={projectileId} target={targetPlayer.name} targetOwner={targetZdo!.GetOwner()} frame={Time.frameCount}");
-            return;
+            ShieldReflectDamageScope scope = new(
+                targetPlayer,
+                targetZdo.m_uid,
+                projectileOwnerPeerId,
+                snapshot,
+                reflectionEnabled: true,
+                source: "local");
+            ActiveShieldReflectDamageScopes.Add(scope);
+            state = new ShieldReflectCharacterDamageState(scope);
+            return false;
         }
 
-        string payload = ShieldReflectProjectilePayload.FromProjectile(projectile).Serialize();
-        CaptainValheimCharacterRpc.SendShieldReflectRequest(targetNView, projectileId, hitPoint, normal, payload);
-        LogShieldReflectDebug(
-            "request.sent",
-            () => $"request.sent projectile={projectile.name} projectileId={projectileId} projectileOwner={projectileZdo.GetOwner()} target={targetPlayer.name} targetOwner={targetZdo!.GetOwner()} frame={Time.frameCount}");
-    }
-
-    internal static void StorePendingShieldReflectContext(Player player, ZDOID projectileId, Vector3 hitPoint, Vector3 normal, string payload)
-    {
-        if (player == null || projectileId == ZDOID.None)
+        if (targetZdo.GetInt(ShieldReflectProtocolZdoKey, 0) != ShieldReflectProtocolVersion)
         {
-            return;
+            // A client that has not advertised this exact protocol continues through
+            // vanilla Character.Damage, so compatibility failure cannot lose damage.
+            return false;
         }
 
-        GameObject? projectileObject = ZNetScene.instance != null ? ZNetScene.instance.FindInstance(projectileId) : null;
-        Projectile? projectile = projectileObject != null ? projectileObject.GetComponent<Projectile>() : null;
-        ShieldReflectProjectilePayload.TryParse(payload, out ShieldReflectProjectilePayload payloadData);
-        if (projectile == null)
-        {
-            if (!payloadData.IsValid)
-            {
-                LogShieldReflectDebug(
-                    "pending.skip.projectile",
-                    () => $"pending.skip reason=projectile-not-found projectileId={projectileId} player={player.name} frame={Time.frameCount}");
-                return;
-            }
-
-            StorePendingShieldReflectContext(
-                player,
-                projectileId,
-                ShieldReflectProjectileContext.FromPayload(payloadData, hitPoint, normal),
-                source: "payload");
-            return;
-        }
-
-        if (normal.sqrMagnitude <= 0.001f)
-        {
-            normal = ResolveFallbackProjectileNormal(projectile, player);
-        }
-
-        StorePendingShieldReflectContext(
-            player,
+        ShieldReflectDamageEnvelope envelope = new(
+            AllocateShieldReflectEventId(),
             projectileId,
-            ShieldReflectProjectileContext.FromProjectile(projectile, hitPoint, water: false, normal),
-            source: payloadData.IsValid ? "rpc" : "rpc-no-payload");
+            targetZdo.m_uid,
+            projectileOwnerPeerId,
+            hit.Clone(),
+            snapshot);
+
+        try
+        {
+            CaptainValheimCharacterRpc.SendShieldReflectDamage(targetNView, envelope.Serialize());
+            LogShieldReflectDebug(
+                "route.sent",
+                () => $"route.sent projectile={snapshot.ProjectileName} eventId={envelope.EventId} projectileId={projectileId} target={targetPlayer.name} targetId={targetZdo.m_uid} sender={projectileOwnerPeerId} frame={Time.frameCount}");
+            return true;
+        }
+        catch (Exception exception)
+        {
+            LogShieldReflectDebug(
+                "route.fallback",
+                () => $"route.fallback reason={exception.GetType().Name} projectile={snapshot.ProjectileName} projectileId={projectileId} target={targetPlayer.name} frame={Time.frameCount}");
+            return false;
+        }
     }
 
-    private static void StorePendingShieldReflectContext(
-        Player player,
-        ZDOID projectileId,
-        ShieldReflectProjectileContext context,
-        string source)
+    internal static void ReceiveRemoteShieldReflectDamage(Player player, ZNetView? nview, long sender, ZPackage package)
     {
-        float now = GetNetworkTimeSeconds();
-        if (!TryGetShieldReflectPlayerId(player, out ZDOID playerId))
+        if (player == null ||
+            nview == null ||
+            !nview.IsValid() ||
+            !nview.IsOwner() ||
+            nview.GetZDO() == null ||
+            package == null)
         {
             return;
         }
 
-        if (TryConsumePendingShieldReflectBlock(player, playerId, projectileId, context, source, now))
+        if (!ShieldReflectDamageEnvelope.TryDeserialize(package, out ShieldReflectDamageEnvelope envelope))
         {
+            LogShieldReflectDebug(
+                "receive.invalidPayload",
+                () => $"receive.skip reason=invalid-payload player={player.name} sender={sender} frame={Time.frameCount}");
             return;
         }
 
-        if (!ShieldReflectPendingContexts.TryGetValue(playerId, out PendingShieldReflectState? state))
+        ZDO actualTargetZdo = nview.GetZDO();
+        ZDOID actualTargetId = actualTargetZdo.m_uid;
+        if (actualTargetId == ZDOID.None ||
+            actualTargetZdo.GetOwner() != ZDOMan.GetSessionID() ||
+            envelope.EventId == 0L ||
+            envelope.TargetId != actualTargetId ||
+            envelope.ProjectileId == ZDOID.None ||
+            sender == 0L ||
+            sender != envelope.ProjectileOwnerPeerId)
         {
-            state = new PendingShieldReflectState();
-            ShieldReflectPendingContexts[playerId] = state;
+            LogShieldReflectDebug(
+                "receive.identity",
+                () => $"receive.skip reason=identity player={player.name} sender={sender} expectedSender={envelope.ProjectileOwnerPeerId} eventId={envelope.EventId} projectileId={envelope.ProjectileId} targetId={envelope.TargetId} actualTargetId={actualTargetId} frame={Time.frameCount}");
+            return;
         }
 
-        PruneExpiredShieldReflectContexts(state, now);
-        while (state.Contexts.Count >= ShieldReflectMaxPendingContextsPerPlayer)
+        ShieldReflectEventKey eventKey = new(
+            envelope.ProjectileOwnerPeerId,
+            envelope.EventId,
+            envelope.ProjectileId,
+            envelope.TargetId);
+        if (!TryMarkShieldReflectEventDelivered(eventKey))
         {
-            state.Contexts.RemoveAt(0);
+            LogShieldReflectDebug(
+                "receive.duplicate",
+                () => $"receive.skip reason=duplicate player={player.name} eventId={envelope.EventId} projectileId={envelope.ProjectileId} targetId={envelope.TargetId} frame={Time.frameCount}");
+            return;
         }
 
-        state.Contexts.Add(new PendingShieldReflectContext(projectileId, context, now + ShieldReflectPendingContextLifetime));
-        LogShieldReflectDebug(
-            "pending.stored",
-            () => $"pending.stored projectile={context.ProjectileName} projectileId={projectileId} source={source} player={player.name} count={state.Contexts.Count} frame={Time.frameCount}");
+        bool senderOwnsLiveProjectile = true;
+        ZDO? liveProjectileZdo = ZDOMan.instance != null ? ZDOMan.instance.GetZDO(envelope.ProjectileId) : null;
+        if (liveProjectileZdo != null)
+        {
+            long liveOwner = liveProjectileZdo.GetOwner();
+            senderOwnsLiveProjectile = liveOwner == 0L || liveOwner == sender;
+        }
+
+        bool reflectionEnabled = senderOwnsLiveProjectile && envelope.ProjectileContext.IsValid;
+        if (!senderOwnsLiveProjectile)
+        {
+            LogShieldReflectDebug(
+                "receive.ownerMismatch",
+                () => $"receive.fallback reason=live-owner-mismatch player={player.name} sender={sender} projectileId={envelope.ProjectileId} liveOwner={liveProjectileZdo!.GetOwner()} frame={Time.frameCount}");
+        }
+
+        ShieldReflectDamageScope scope = new(
+            player,
+            envelope.TargetId,
+            envelope.ProjectileOwnerPeerId,
+            envelope.ProjectileContext,
+            reflectionEnabled,
+            source: "remote-envelope");
+        ActiveShieldReflectDamageScopes.Add(scope);
+
+        try
+        {
+            // The target owns this ZNetView. ZRoutedRpc handles the self-targeted
+            // RPC_Damage synchronously. Calling it directly avoids re-running the
+            // Character.Damage prefix chain that already processed this HitData on
+            // the projectile owner.
+            nview.InvokeRPC("RPC_Damage", envelope.Hit);
+        }
+        finally
+        {
+            RemoveShieldReflectDamageScope(scope);
+        }
     }
 
     internal static void LogShieldReflectDebug(string key, Func<string> messageFactory)
     {
-        if (CaptainValheimPlugin.Settings.General.ShieldReflectDebugLogging.Value != CaptainValheimPlugin.Toggle.On)
+        try
         {
-            return;
-        }
+            if (CaptainValheimPlugin.Settings.General.ShieldReflectDebugLogging.Value != CaptainValheimPlugin.Toggle.On)
+            {
+                return;
+            }
 
-        float now = Time.time;
-        if (ShieldReflectDebugNextLogTimes.TryGetValue(key, out float nextAllowedTime) && now < nextAllowedTime)
+            CaptainValheimPlugin.ModLogger.LogInfo($"[ShieldReflect:{key}] {messageFactory()}");
+        }
+        catch
         {
-            return;
+            // Diagnostics must never interrupt damage delivery.
         }
-
-        ShieldReflectDebugNextLogTimes[key] = now + ShieldReflectDebugThrottleSeconds;
-        CaptainValheimPlugin.ModLogger.LogInfo("[ShieldReflect] " + messageFactory());
     }
 
-    internal static BlockAttackContext CaptureBlockAttackContext(Humanoid humanoid, HitData hit, ItemDrop.ItemData blocker, float blockTimer)
+    internal static BlockAttackContext CaptureBlockAttackContext(
+        Humanoid humanoid,
+        HitData hit,
+        ItemDrop.ItemData blocker)
     {
         BlockAttackContext context = new();
-        if (humanoid is not Player player || blocker == null)
+        if (humanoid is not Player player || blocker == null || hit == null)
         {
             return context;
         }
 
-        if (!SecondaryAttackRuntimeFacade.TryGetDefinition(blocker, out SecondaryAttackDefinition definition) || !definition.ShieldProjectileReflect)
+        if (!SecondaryAttackRuntimeFacade.TryGetDefinition(blocker, out SecondaryAttackDefinition definition) ||
+            !definition.ShieldProjectileReflect)
         {
             return context;
         }
@@ -202,173 +334,178 @@ internal static partial class SecondaryAttackManager
         context.Player = player;
         context.Blocker = blocker;
         context.Definition = definition;
-        if (SecondaryAttackRuntimeContext.TryPeekProjectileHitContext(out ProjectileHitContext? projectileContext))
+        context.StaminaBefore = player.GetStamina();
+        context.Hit = hit;
+
+        if (TryPeekShieldReflectContext(
+                player,
+                hit,
+                out ShieldReflectProjectileContext projectileContext,
+                out string source))
         {
-            ProjectileHitContext localProjectileContext = projectileContext.GetValueOrDefault();
-            context.ProjectileContext = ShieldReflectProjectileContext.FromProjectileContext(localProjectileContext);
-            context.ProjectileContextSource = "local";
-        }
-        else if (TryConsumePendingShieldReflectContext(player, hit, out ShieldReflectProjectileContext? pendingContext))
-        {
-            context.ProjectileContext = pendingContext;
-            context.ProjectileContextSource = "rpc";
-        }
-        else
-        {
-            LogShieldReflectDebug(
-                "capture.noContext",
-                () => $"capture.noContext player={player.name} blocker={blocker.m_dropPrefab?.name ?? blocker.m_shared?.m_name ?? "<unknown>"} frame={Time.frameCount}");
+            context.ProjectileContext = projectileContext;
+            context.ProjectileContextSource = source;
         }
 
-        BlockCostAnalysis costAnalysis = AnalyzeBlockCost(player, blocker, hit, blockTimer);
-        context.VanillaBlockStaminaCost = costAnalysis.StaminaCost;
+        ActiveShieldReflectBlockAttackContexts.Add(context);
+
         return context;
     }
 
-    internal static void FinalizeBlockAttack(Humanoid humanoid, bool result, HitData hit, BlockAttackContext context)
+    internal static void RecordShieldReflectBlockDamage(
+        HitData hit,
+        float blockableDamageBefore)
     {
-        if (!result || context.Player == null || context.Blocker == null || context.Definition == null)
+        if (hit == null || ActiveShieldReflectBlockAttackContexts.Count == 0)
         {
-            if (context.Player != null && context.Definition != null)
+            return;
+        }
+
+        BlockAttackContext context =
+            ActiveShieldReflectBlockAttackContexts[ActiveShieldReflectBlockAttackContexts.Count - 1];
+        if (!ReferenceEquals(context.Hit, hit))
+        {
+            return;
+        }
+
+        float blockedDamage = blockableDamageBefore - hit.GetTotalBlockableDamage();
+        if (blockedDamage > 0.001f)
+        {
+            context.BlockedDamage += blockedDamage;
+        }
+    }
+
+    internal static void EndShieldReflectBlockAttack(ref BlockAttackContext context)
+    {
+        if (context != null)
+        {
+            int lastIndex = ActiveShieldReflectBlockAttackContexts.Count - 1;
+            if (lastIndex >= 0 && ReferenceEquals(ActiveShieldReflectBlockAttackContexts[lastIndex], context))
             {
-                LogShieldReflectDebug(
-                    "finalize.skip.context",
-                    () => $"finalize.skip reason=no-success-or-context result={result} player={context.Player.name} source={context.ProjectileContextSource} frame={Time.frameCount}");
+                ActiveShieldReflectBlockAttackContexts.RemoveAt(lastIndex);
             }
-
-            return;
+            else
+            {
+                ActiveShieldReflectBlockAttackContexts.Remove(context);
+            }
         }
 
-        if (!context.ProjectileContext.HasValue)
-        {
-            StorePendingShieldReflectBlock(context, hit);
-            return;
-        }
-
-        ShieldReflectProjectileContext projectileContext = context.ProjectileContext.Value;
-        FinalizeShieldReflect(context.Player, context.Blocker, context.Definition, context.VanillaBlockStaminaCost, projectileContext, context.ProjectileContextSource);
+        context = null!;
     }
 
-    private static void StorePendingShieldReflectBlock(BlockAttackContext context, HitData hit)
+    internal static void BeginShieldReflectRpcDamage(
+        Character character,
+        ref long sender,
+        HitData hit,
+        out ShieldReflectRpcDamageState state)
     {
-        if (context.Player == null || context.Blocker == null || context.Definition == null)
+        state = default;
+        if (character is not Player player ||
+            hit == null ||
+            sender != ZDOMan.GetSessionID() ||
+            ActiveShieldReflectDamageScopes.Count == 0)
         {
             return;
         }
 
-        float now = GetNetworkTimeSeconds();
-        if (!TryGetShieldReflectPlayerId(context.Player, out ZDOID playerId))
+        ShieldReflectDamageScope scope = ActiveShieldReflectDamageScopes[ActiveShieldReflectDamageScopes.Count - 1];
+        if (scope.RpcBound || scope.BoundHit != null || !ShieldReflectDamageScopeMatches(scope, player))
         {
             return;
         }
 
-        if (!ShieldReflectPendingBlocks.TryGetValue(playerId, out PendingShieldReflectBlockState? state))
-        {
-            state = new PendingShieldReflectBlockState();
-            ShieldReflectPendingBlocks[playerId] = state;
-        }
-
-        PruneExpiredShieldReflectBlocks(state, now);
-        while (state.Blocks.Count >= ShieldReflectMaxPendingBlocksPerPlayer)
-        {
-            state.Blocks.RemoveAt(0);
-        }
-
-        state.Blocks.Add(new PendingShieldReflectBlock(
-            context.Blocker,
-            context.Definition,
-            hit.m_point,
-            context.VanillaBlockStaminaCost,
-            now + ShieldReflectPendingBlockLifetime));
-        LogShieldReflectDebug(
-            "block.pending",
-            () => $"block.pending reason=no-projectile-context player={context.Player.name} blocker={context.Blocker.m_dropPrefab?.name ?? context.Blocker.m_shared?.m_name ?? "<unknown>"} count={state.Blocks.Count} frame={Time.frameCount}");
+        scope.RpcBound = true;
+        scope.BoundHit = hit;
+        state = new ShieldReflectRpcDamageState(scope, hit);
+        sender = scope.OriginalSenderPeerId;
     }
 
-    private static bool TryConsumePendingShieldReflectBlock(
-        Player player,
-        ZDOID playerId,
-        ZDOID projectileId,
-        ShieldReflectProjectileContext projectileContext,
-        string source,
-        float now)
+    internal static void EndShieldReflectRpcDamage(ref ShieldReflectRpcDamageState state)
     {
-        if (!ShieldReflectPendingBlocks.TryGetValue(playerId, out PendingShieldReflectBlockState? state))
+        ShieldReflectDamageScope? scope = state.Scope;
+        HitData? hit = state.Hit;
+        state = default;
+        if (scope != null && ReferenceEquals(scope.BoundHit, hit))
         {
-            return false;
+            scope.BoundHit = null;
+        }
+    }
+
+    internal static void EndShieldReflectCharacterDamage(ref ShieldReflectCharacterDamageState state)
+    {
+        ShieldReflectDamageScope? scope = state.Scope;
+        state = default;
+        RemoveShieldReflectDamageScope(scope);
+    }
+
+    internal static void FinalizeBlockAttack(bool result, HitData hit, BlockAttackContext context)
+    {
+        if (!result ||
+            hit == null ||
+            context == null ||
+            context.Player == null ||
+            context.Blocker == null ||
+            context.Definition == null ||
+            !context.ProjectileContext.HasValue)
+        {
+            return;
         }
 
-        PruneExpiredShieldReflectBlocks(state, now);
-        if (state.Blocks.Count == 0)
-        {
-            ShieldReflectPendingBlocks.Remove(playerId);
-            return false;
-        }
-
-        int index = SelectPendingShieldReflectBlock(state, projectileContext.HitPoint);
-        if (index < 0)
+        Player player = context.Player;
+        if (context.BlockedDamage <= 0.001f)
         {
             LogShieldReflectDebug(
-                "block.pending.skip.distance",
-                () => $"block.pending.skip reason=hit-point-distance projectile={projectileContext.ProjectileName} projectileId={projectileId} player={player.name} pending={state.Blocks.Count} frame={Time.frameCount}");
-            return false;
+                "block.notSuccessful",
+                () => $"block.skip player={player.name} blockDamageDelta={context.BlockedDamage:0.###} source={context.ProjectileContextSource} frame={Time.frameCount}");
+            return;
         }
 
-        PendingShieldReflectBlock pending = state.Blocks[index];
-        state.Blocks.RemoveAt(index);
-        if (state.Blocks.Count == 0)
-        {
-            ShieldReflectPendingBlocks.Remove(playerId);
-        }
-
-        LogShieldReflectDebug(
-            "block.pending.consumed",
-            () => $"block.pending.consumed projectile={projectileContext.ProjectileName} projectileId={projectileId} source={source} player={player.name} remaining={state.Blocks.Count} frame={Time.frameCount}");
-
-        FinalizeShieldReflect(player, pending.Blocker, pending.Definition, pending.VanillaBlockStaminaCost, projectileContext, source + "-late");
-        return true;
+        float actualBlockStaminaCost = Mathf.Max(0f, context.StaminaBefore - player.GetStamina());
+        FinalizeShieldReflect(
+            player,
+            context.Blocker,
+            context.Definition,
+            actualBlockStaminaCost,
+            context.ProjectileContext.Value,
+            context.ProjectileContextSource);
     }
 
     private static void FinalizeShieldReflect(
         Player player,
         ItemDrop.ItemData blocker,
         SecondaryAttackDefinition definition,
-        float vanillaBlockStaminaCost,
+        float actualBlockStaminaCost,
         ShieldReflectProjectileContext projectileContext,
         string source)
     {
-        Projectile? projectile = projectileContext.Projectile;
-        if (projectileContext.Water ||
+        if (!projectileContext.IsValid ||
+            projectileContext.Water ||
             !projectileContext.Blockable ||
-            string.IsNullOrWhiteSpace(projectileContext.ProjectilePrefabName) ||
-            (projectile != null && ShieldRuntimeSystem.IsReflectedProjectile(projectile)))
+            projectileContext.Reflected)
         {
             LogShieldReflectDebug(
-                "finalize.skip.projectile",
-                () => $"finalize.skip reason=invalid-projectile player={player.name} projectile={projectileContext.ProjectileName} water={projectileContext.Water} source={source} frame={Time.frameCount}");
+                "finalize.invalidProjectile",
+                () => $"finalize.skip player={player.name} projectile={projectileContext.ProjectileName} water={projectileContext.Water} reflected={projectileContext.Reflected} source={source} frame={Time.frameCount}");
             return;
         }
 
-        float staminaDelta = vanillaBlockStaminaCost * (Mathf.Max(0f, definition.ShieldProjectileReflectStaminaFactor) - 1f);
+        float staminaDelta = actualBlockStaminaCost *
+                             (Mathf.Max(0f, definition.ShieldProjectileReflectStaminaFactor) - 1f);
         if (staminaDelta > 0f && !player.HaveStamina(staminaDelta))
         {
             LogShieldReflectDebug(
-                "finalize.skip.stamina",
-                () => $"finalize.skip reason=stamina player={player.name} projectile={projectileContext.ProjectileName} staminaDelta={staminaDelta:0.###} source={source} frame={Time.frameCount}");
+                "finalize.stamina",
+                () => $"finalize.skip player={player.name} projectile={projectileContext.ProjectileName} staminaDelta={staminaDelta:0.###} source={source} frame={Time.frameCount}");
             return;
         }
 
         if (!TryReflectShieldProjectile(player, blocker, definition, projectileContext))
         {
             LogShieldReflectDebug(
-                "finalize.skip.reflect",
-                () => $"finalize.skip reason=reflect-failed player={player.name} projectile={projectileContext.ProjectileName} source={source} frame={Time.frameCount}");
+                "finalize.spawn",
+                () => $"finalize.skip reason=spawn-failed player={player.name} projectile={projectileContext.ProjectileName} source={source} frame={Time.frameCount}");
             return;
         }
-
-        LogShieldReflectDebug(
-            "finalize.success",
-            () => $"finalize.success player={player.name} projectile={projectileContext.ProjectileName} source={source} staminaDelta={staminaDelta:0.###} frame={Time.frameCount}");
 
         if (staminaDelta > 0f)
         {
@@ -378,204 +515,10 @@ internal static partial class SecondaryAttackManager
         {
             player.AddStamina(-staminaDelta);
         }
-    }
 
-    private static bool TryGetProjectileZdo(Projectile projectile, out ZNetView? nview, out ZDO? zdo)
-    {
-        nview = projectile != null ? projectile.GetComponent<ZNetView>() : null;
-        zdo = nview != null && nview.IsValid() ? nview.GetZDO() : null;
-        return nview != null && nview.IsValid() && zdo != null;
-    }
-
-    private static bool TryConsumePendingShieldReflectContext(Player player, HitData hit, out ShieldReflectProjectileContext? context)
-    {
-        context = null;
-        if (player == null || !TryGetShieldReflectPlayerId(player, out ZDOID playerId))
-        {
-            return false;
-        }
-
-        if (!ShieldReflectPendingContexts.TryGetValue(playerId, out PendingShieldReflectState? state))
-        {
-            if (!hit.m_ranged)
-            {
-                LogShieldReflectDebug(
-                    "pending.skip.notRanged",
-                    () => $"pending.skip reason=not-ranged player={player.name} frame={Time.frameCount}");
-            }
-
-            return false;
-        }
-
-        PruneExpiredShieldReflectContexts(state, GetNetworkTimeSeconds());
-        if (state.Contexts.Count == 0)
-        {
-            ShieldReflectPendingContexts.Remove(playerId);
-            return false;
-        }
-
-        int index = SelectPendingShieldReflectContext(state, hit);
-        if (index < 0)
-        {
-            LogShieldReflectDebug(
-                "pending.skip.distance",
-                () => $"pending.skip reason=hit-point-distance player={player.name} pending={state.Contexts.Count} frame={Time.frameCount}");
-            return false;
-        }
-
-        if (!hit.m_ranged)
-        {
-            LogShieldReflectDebug(
-                "pending.consume.notRanged",
-                () => $"pending.consume reason=not-ranged-with-context player={player.name} pending={state.Contexts.Count} frame={Time.frameCount}");
-        }
-
-        PendingShieldReflectContext pending = state.Contexts[index];
-        state.Contexts.RemoveAt(index);
-        if (state.Contexts.Count == 0)
-        {
-            ShieldReflectPendingContexts.Remove(playerId);
-        }
-
-        context = pending.Context;
         LogShieldReflectDebug(
-            "pending.consumed",
-            () => $"pending.consumed projectile={pending.Context.ProjectileName} projectileId={pending.ProjectileId} player={player.name} remaining={state.Contexts.Count} frame={Time.frameCount}");
-        return true;
-    }
-
-    private static int SelectPendingShieldReflectContext(PendingShieldReflectState state, HitData hit)
-    {
-        if (state.Contexts.Count <= 1)
-        {
-            return 0;
-        }
-
-        Vector3 hitPoint = hit.m_point;
-        int bestIndex = 0;
-        float bestDistance = float.PositiveInfinity;
-        for (int index = 0; index < state.Contexts.Count; index++)
-        {
-            float distance = (state.Contexts[index].Context.HitPoint - hitPoint).sqrMagnitude;
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                bestIndex = index;
-            }
-        }
-
-        // HitData points from a routed damage RPC are not reliable enough to be the sole
-        // correlation key. Requests are routed in order per target, so preserve FIFO as
-        // a bounded fallback when several projectiles arrive almost simultaneously.
-        return bestDistance <= ShieldReflectPendingHitPointMaxDistanceSqr ? bestIndex : 0;
-    }
-
-    private static void PruneExpiredShieldReflectContexts(PendingShieldReflectState state, float now)
-    {
-        for (int index = state.Contexts.Count - 1; index >= 0; index--)
-        {
-            if (state.Contexts[index].ExpiresAt <= now)
-            {
-                state.Contexts.RemoveAt(index);
-            }
-        }
-    }
-
-    private static int SelectPendingShieldReflectBlock(PendingShieldReflectBlockState state, Vector3 hitPoint)
-    {
-        if (state.Blocks.Count <= 1)
-        {
-            return 0;
-        }
-
-        int bestIndex = 0;
-        float bestDistance = float.PositiveInfinity;
-        for (int index = 0; index < state.Blocks.Count; index++)
-        {
-            float distance = (state.Blocks[index].HitPoint - hitPoint).sqrMagnitude;
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                bestIndex = index;
-            }
-        }
-
-        return bestDistance <= ShieldReflectPendingHitPointMaxDistanceSqr ? bestIndex : 0;
-    }
-
-    private static bool TryGetShieldReflectPlayerId(Player player, out ZDOID playerId)
-    {
-        playerId = ZDOID.None;
-        if (!TryGetCharacterZdo(player, out _, out ZDO? zdo) || zdo == null || zdo.m_uid == ZDOID.None)
-        {
-            return false;
-        }
-
-        playerId = zdo.m_uid;
-        return true;
-    }
-
-    internal static void ForgetShieldReflectState(Character character)
-    {
-        if (character is not Player player || !TryGetShieldReflectPlayerId(player, out ZDOID playerId))
-        {
-            return;
-        }
-
-        ShieldReflectPendingContexts.Remove(playerId);
-        ShieldReflectPendingBlocks.Remove(playerId);
-    }
-
-    private static void PruneExpiredShieldReflectBlocks(PendingShieldReflectBlockState state, float now)
-    {
-        for (int index = state.Blocks.Count - 1; index >= 0; index--)
-        {
-            if (state.Blocks[index].ExpiresAt <= now)
-            {
-                state.Blocks.RemoveAt(index);
-            }
-        }
-    }
-
-    private static Vector3 ResolveFallbackProjectileNormal(Projectile projectile, Player player)
-    {
-        Vector3 velocity = projectile.GetVelocity();
-        if (velocity.sqrMagnitude > 0.001f)
-        {
-            return -velocity.normalized;
-        }
-
-        Vector3 fromProjectile = player.transform.position - projectile.transform.position;
-        return fromProjectile.sqrMagnitude > 0.001f ? fromProjectile.normalized : -player.GetLookDir();
-    }
-
-    private static BlockCostAnalysis AnalyzeBlockCost(Player player, ItemDrop.ItemData blocker, HitData hit, float blockTimer)
-    {
-        HitData hitData = hit.Clone();
-        bool timedBlock = blocker.m_shared.m_timedBlockBonus > 1f && blockTimer != -1f && blockTimer < 0.25f;
-        float skillFactor = player.GetSkillFactor(Skills.SkillType.Blocking);
-        float blockPower = blocker.GetBlockPower(skillFactor);
-        if (timedBlock)
-        {
-            blockPower *= blocker.m_shared.m_timedBlockBonus;
-            player.GetSEMan().ModifyTimedBlockBonus(ref blockPower);
-        }
-
-        if (blocker.m_shared.m_damageModifiers.Count > 0)
-        {
-            HitData.DamageModifiers modifiers = default;
-            modifiers.Apply(blocker.m_shared.m_damageModifiers);
-            hitData.ApplyResistance(modifiers, out _);
-        }
-
-        HitData.DamageTypes blockedDamage = hitData.m_damage.Clone();
-        blockedDamage.ApplyArmor(blockPower);
-        float totalBlockableDamage = hitData.GetTotalBlockableDamage();
-        float postArmorBlockableDamage = blockedDamage.GetTotalBlockableDamage();
-        float blockedAmount = totalBlockableDamage - postArmorBlockableDamage;
-        float blockUsageRatio = blockPower > 0f ? Mathf.Clamp01(blockedAmount / blockPower) : 0f;
-        float staminaCost = timedBlock ? player.m_perfectBlockStaminaDrain : player.m_blockStaminaDrain * blockUsageRatio;
-        return new BlockCostAnalysis(staminaCost);
+            "finalize.success",
+            () => $"finalize.success player={player.name} projectile={projectileContext.ProjectileName} source={source} blockStamina={actualBlockStaminaCost:0.###} staminaDelta={staminaDelta:0.###} frame={Time.frameCount}");
     }
 
     private static bool TryReflectShieldProjectile(
@@ -584,55 +527,84 @@ internal static partial class SecondaryAttackManager
         SecondaryAttackDefinition definition,
         ShieldReflectProjectileContext projectileContext)
     {
-        GameObject? sourcePrefab = ZNetScene.instance?.GetPrefab(projectileContext.ProjectilePrefabName);
-        if (sourcePrefab == null && projectileContext.Projectile != null)
+        GameObject? reflectedObject = null;
+        try
         {
-            sourcePrefab = projectileContext.Projectile.gameObject;
-        }
+            GameObject? sourcePrefab = ZNetScene.instance?.GetPrefab(projectileContext.ProjectilePrefabName);
+            if (sourcePrefab == null && projectileContext.Projectile != null)
+            {
+                sourcePrefab = projectileContext.Projectile.gameObject;
+            }
 
-        if (sourcePrefab == null)
+            if (sourcePrefab == null)
+            {
+                return false;
+            }
+
+            Vector3 normal = projectileContext.Normal.sqrMagnitude > 0.001f
+                ? projectileContext.Normal.normalized
+                : -player.GetLookDir();
+            Vector3 spawnPoint = projectileContext.HitPoint + normal * 0.15f;
+            reflectedObject = UnityEngine.Object.Instantiate(
+                sourcePrefab,
+                spawnPoint,
+                Quaternion.identity);
+            Projectile? reflectedProjectile = reflectedObject.GetComponent<Projectile>();
+            IProjectile? reflectedProjectileInterface = reflectedObject.GetComponent<IProjectile>();
+            if (reflectedProjectile == null || reflectedProjectileInterface == null)
+            {
+                DestroyProjectileObject(reflectedObject);
+                return false;
+            }
+
+            Vector3 incomingVelocity = projectileContext.Velocity;
+            Vector3 fallbackDirection = incomingVelocity.sqrMagnitude > 0.001f
+                ? Vector3.Reflect(incomingVelocity.normalized, normal)
+                : player.GetLookDir();
+            Vector3 aimDirection = ShieldRuntimeSystem.ResolvePlayerAimDirectionForReflection(
+                player,
+                spawnPoint,
+                fallbackDirection,
+                maxTravelDistance: 60f);
+            if (aimDirection.sqrMagnitude <= 0.001f)
+            {
+                aimDirection = fallbackDirection.sqrMagnitude > 0.001f
+                    ? fallbackDirection.normalized
+                    : player.GetLookDir();
+            }
+
+            float speed = Mathf.Max(incomingVelocity.magnitude, 10f);
+            HitData reflectedHit = BuildReflectedProjectileHitData(player, blocker, definition, projectileContext);
+            reflectedProjectileInterface.Setup(
+                player,
+                aimDirection.normalized * speed,
+                projectileContext.HitNoise,
+                reflectedHit,
+                blocker,
+                projectileContext.Ammo);
+
+            ShieldRuntimeSystem.MarkReflectedProjectile(reflectedProjectile);
+            return true;
+        }
+        catch (Exception exception)
         {
+            if (reflectedObject != null)
+            {
+                try
+                {
+                    DestroyProjectileObject(reflectedObject);
+                }
+                catch
+                {
+                    // Keep reflection cleanup failures from escaping into RPC_Damage.
+                }
+            }
+
+            LogShieldReflectDebug(
+                "spawn.exception",
+                () => $"spawn.skip reason={exception.GetType().Name} player={player.name} projectile={projectileContext.ProjectileName} frame={Time.frameCount}");
             return false;
         }
-
-        Vector3 normal = projectileContext.Normal.sqrMagnitude > 0.001f
-            ? projectileContext.Normal.normalized
-            : -player.GetLookDir();
-        Vector3 spawnPoint = projectileContext.HitPoint + normal * 0.15f;
-        GameObject reflectedObject = UnityEngine.Object.Instantiate(
-            sourcePrefab,
-            spawnPoint,
-            Quaternion.identity);
-        Projectile? reflectedProjectile = reflectedObject.GetComponent<Projectile>();
-        IProjectile? reflectedProjectileInterface = reflectedObject.GetComponent<IProjectile>();
-        if (reflectedProjectile == null || reflectedProjectileInterface == null)
-        {
-            DestroyProjectileObject(reflectedObject);
-            return false;
-        }
-
-        Vector3 incomingVelocity = projectileContext.Velocity;
-        Vector3 fallbackDirection = incomingVelocity.sqrMagnitude > 0.001f
-            ? Vector3.Reflect(incomingVelocity.normalized, normal)
-            : player.GetLookDir();
-        Vector3 aimDirection = ShieldRuntimeSystem.ResolvePlayerAimDirectionForReflection(player, spawnPoint, fallbackDirection, maxTravelDistance: 60f);
-        if (aimDirection.sqrMagnitude <= 0.001f)
-        {
-            aimDirection = fallbackDirection.sqrMagnitude > 0.001f ? fallbackDirection.normalized : player.GetLookDir();
-        }
-
-        float speed = Mathf.Max(incomingVelocity.magnitude, 10f);
-        HitData reflectedHit = BuildReflectedProjectileHitData(player, blocker, definition, projectileContext);
-        reflectedProjectileInterface.Setup(
-            player,
-            aimDirection.normalized * speed,
-            projectileContext.HitNoise,
-            reflectedHit,
-            blocker,
-            projectileContext.Ammo);
-
-        ShieldRuntimeSystem.MarkReflectedProjectile(reflectedProjectile);
-        return true;
     }
 
     private static HitData BuildReflectedProjectileHitData(
@@ -658,6 +630,97 @@ internal static partial class SecondaryAttackManager
         return hitData;
     }
 
+    private static bool TryGetProjectileZdo(Projectile projectile, out ZNetView? nview, out ZDO? zdo)
+    {
+        nview = projectile != null ? projectile.GetComponent<ZNetView>() : null;
+        zdo = nview != null && nview.IsValid() ? nview.GetZDO() : null;
+        return nview != null && nview.IsValid() && zdo != null;
+    }
+
+    private static bool TryPeekShieldReflectContext(
+        Player player,
+        HitData hit,
+        out ShieldReflectProjectileContext context,
+        out string source)
+    {
+        if (ActiveShieldReflectDamageScopes.Count == 0)
+        {
+            context = default;
+            source = string.Empty;
+            return false;
+        }
+
+        ShieldReflectDamageScope scope = ActiveShieldReflectDamageScopes[ActiveShieldReflectDamageScopes.Count - 1];
+        if (!scope.ReflectionEnabled ||
+            !ShieldReflectDamageScopeMatches(scope, player) ||
+            !ReferenceEquals(scope.BoundHit, hit))
+        {
+            context = default;
+            source = string.Empty;
+            return false;
+        }
+
+        context = scope.ProjectileContext;
+        source = scope.Source;
+        return context.IsValid;
+    }
+
+    private static bool ShieldReflectDamageScopeMatches(ShieldReflectDamageScope scope, Player player)
+    {
+        return scope.Player == player &&
+               TryGetCharacterZdo(player, out _, out ZDO? playerZdo) &&
+               playerZdo!.m_uid == scope.TargetId;
+    }
+
+    private static void RemoveShieldReflectDamageScope(ShieldReflectDamageScope? scope)
+    {
+        if (scope == null)
+        {
+            return;
+        }
+
+        int lastIndex = ActiveShieldReflectDamageScopes.Count - 1;
+        if (lastIndex >= 0 && ReferenceEquals(ActiveShieldReflectDamageScopes[lastIndex], scope))
+        {
+            ActiveShieldReflectDamageScopes.RemoveAt(lastIndex);
+        }
+        else
+        {
+            ActiveShieldReflectDamageScopes.Remove(scope);
+        }
+    }
+
+    private static bool TryMarkShieldReflectEventDelivered(ShieldReflectEventKey eventKey)
+    {
+        if (!DeliveredShieldReflectEvents.Add(eventKey))
+        {
+            return false;
+        }
+
+        DeliveredShieldReflectEventOrder.Add(eventKey);
+        while (DeliveredShieldReflectEventOrder.Count > ShieldReflectDeliveredEventLimit)
+        {
+            DeliveredShieldReflectEvents.Remove(DeliveredShieldReflectEventOrder[0]);
+            DeliveredShieldReflectEventOrder.RemoveAt(0);
+        }
+
+        return true;
+    }
+
+    private static long AllocateShieldReflectEventId()
+    {
+        unchecked
+        {
+            ++NextShieldReflectEventId;
+            if (NextShieldReflectEventId == 0L)
+            {
+                ++NextShieldReflectEventId;
+            }
+
+            return NextShieldReflectEventId;
+        }
+    }
+
     internal readonly struct ShieldReflectProjectileContext
     {
         private ShieldReflectProjectileContext(
@@ -674,7 +737,8 @@ internal static partial class SecondaryAttackManager
             bool blockable,
             bool dodgeable,
             int statusEffectHash,
-            ItemDrop.ItemData? ammo)
+            ItemDrop.ItemData? ammo,
+            bool reflected)
         {
             Projectile = projectile;
             ProjectilePrefabName = projectilePrefabName;
@@ -690,6 +754,7 @@ internal static partial class SecondaryAttackManager
             Dodgeable = dodgeable;
             StatusEffectHash = statusEffectHash;
             Ammo = ammo;
+            Reflected = reflected;
         }
 
         public Projectile? Projectile { get; }
@@ -722,12 +787,24 @@ internal static partial class SecondaryAttackManager
 
         public ItemDrop.ItemData? Ammo { get; }
 
-        public static ShieldReflectProjectileContext FromProjectileContext(ProjectileHitContext context)
-        {
-            return FromProjectile(context.Projectile, context.HitPoint, context.Water, context.Normal);
-        }
+        public bool Reflected { get; }
 
-        public static ShieldReflectProjectileContext FromProjectile(Projectile projectile, Vector3 hitPoint, bool water, Vector3 normal)
+        public bool IsValid =>
+            !string.IsNullOrWhiteSpace(ProjectilePrefabName) &&
+            ProjectilePrefabName.Length <= 256 &&
+            IsFinite(HitPoint) &&
+            IsFinite(Normal) &&
+            IsFinite(Velocity) &&
+            IsFinite(HitNoise) &&
+            IsFinite(Damage) &&
+            IsFinite(AttackForce) &&
+            IsFinite(BackstabBonus);
+
+        public static ShieldReflectProjectileContext FromProjectile(
+            Projectile projectile,
+            Vector3 hitPoint,
+            bool water,
+            Vector3 normal)
         {
             return new ShieldReflectProjectileContext(
                 projectile,
@@ -743,199 +820,233 @@ internal static partial class SecondaryAttackManager
                 projectile.m_blockable,
                 projectile.m_dodgeable,
                 ProjectileAccess.GetStatusEffectHash(projectile),
-                ProjectileAccess.GetAmmo(projectile));
+                ProjectileAccess.GetAmmo(projectile),
+                ShieldRuntimeSystem.IsReflectedProjectile(projectile));
         }
 
-        public static ShieldReflectProjectileContext FromPayload(ShieldReflectProjectilePayload payload, Vector3 hitPoint, Vector3 normal)
+        internal void Serialize(ZPackage package)
+        {
+            package.Write(ProjectilePrefabName ?? string.Empty);
+            package.Write(HitPoint);
+            package.Write(Water);
+            package.Write(Normal);
+            package.Write(Velocity);
+            package.Write(HitNoise);
+            WriteDamage(package, Damage);
+            package.Write(AttackForce);
+            package.Write(BackstabBonus);
+            package.Write(Blockable);
+            package.Write(Dodgeable);
+            package.Write(StatusEffectHash);
+            package.Write(Reflected);
+        }
+
+        internal static ShieldReflectProjectileContext Deserialize(ZPackage package)
         {
             return new ShieldReflectProjectileContext(
                 projectile: null,
-                payload.ProjectilePrefabName,
-                hitPoint,
-                water: false,
-                normal,
-                payload.Velocity,
-                payload.HitNoise,
-                payload.Damage.Clone(),
-                payload.AttackForce,
-                payload.BackstabBonus,
-                payload.Blockable,
-                payload.Dodgeable,
-                payload.StatusEffectHash,
-                ammo: null);
+                package.ReadString(),
+                package.ReadVector3(),
+                package.ReadBool(),
+                package.ReadVector3(),
+                package.ReadVector3(),
+                package.ReadSingle(),
+                ReadDamage(package),
+                package.ReadSingle(),
+                package.ReadSingle(),
+                package.ReadBool(),
+                package.ReadBool(),
+                package.ReadInt(),
+                ammo: null,
+                package.ReadBool());
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static bool IsFinite(HitData.DamageTypes damage)
+        {
+            return IsFinite(damage.m_damage) &&
+                   IsFinite(damage.m_blunt) &&
+                   IsFinite(damage.m_slash) &&
+                   IsFinite(damage.m_pierce) &&
+                   IsFinite(damage.m_chop) &&
+                   IsFinite(damage.m_pickaxe) &&
+                   IsFinite(damage.m_fire) &&
+                   IsFinite(damage.m_frost) &&
+                   IsFinite(damage.m_lightning) &&
+                   IsFinite(damage.m_poison) &&
+                   IsFinite(damage.m_spirit);
         }
     }
 
-    internal readonly struct ShieldReflectProjectilePayload
+    private readonly struct ShieldReflectDamageEnvelope
     {
-        private const char Separator = '|';
-        private const int Version = 1;
-        private const int FieldCount = 22;
-
-        private ShieldReflectProjectilePayload(
-            string projectilePrefabName,
-            Vector3 velocity,
-            float hitNoise,
-            HitData.DamageTypes damage,
-            float attackForce,
-            float backstabBonus,
-            bool blockable,
-            bool dodgeable,
-            int statusEffectHash)
+        internal ShieldReflectDamageEnvelope(
+            long eventId,
+            ZDOID projectileId,
+            ZDOID targetId,
+            long projectileOwnerPeerId,
+            HitData hit,
+            ShieldReflectProjectileContext projectileContext)
         {
-            ProjectilePrefabName = projectilePrefabName;
-            Velocity = velocity;
-            HitNoise = hitNoise;
-            Damage = damage;
-            AttackForce = attackForce;
-            BackstabBonus = backstabBonus;
-            Blockable = blockable;
-            Dodgeable = dodgeable;
-            StatusEffectHash = statusEffectHash;
-            IsValid = !string.IsNullOrWhiteSpace(projectilePrefabName);
+            EventId = eventId;
+            ProjectileId = projectileId;
+            TargetId = targetId;
+            ProjectileOwnerPeerId = projectileOwnerPeerId;
+            Hit = hit;
+            ProjectileContext = projectileContext;
         }
 
-        public bool IsValid { get; }
+        internal long EventId { get; }
 
-        public string ProjectilePrefabName { get; }
+        internal ZDOID ProjectileId { get; }
 
-        public Vector3 Velocity { get; }
+        internal ZDOID TargetId { get; }
 
-        public float HitNoise { get; }
+        internal long ProjectileOwnerPeerId { get; }
 
-        public HitData.DamageTypes Damage { get; }
+        internal HitData Hit { get; }
 
-        public float AttackForce { get; }
+        internal ShieldReflectProjectileContext ProjectileContext { get; }
 
-        public float BackstabBonus { get; }
-
-        public bool Blockable { get; }
-
-        public bool Dodgeable { get; }
-
-        public int StatusEffectHash { get; }
-
-        public static ShieldReflectProjectilePayload FromProjectile(Projectile projectile)
+        internal ZPackage Serialize()
         {
-            return new ShieldReflectProjectilePayload(
-                ResolveProjectilePrefabName(projectile),
-                ProjectileAccess.GetVelocity(projectile),
-                projectile.m_hitNoise,
-                projectile.m_damage.Clone(),
-                projectile.m_attackForce,
-                projectile.m_backstabBonus,
-                projectile.m_blockable,
-                projectile.m_dodgeable,
-                ProjectileAccess.GetStatusEffectHash(projectile));
+            ZPackage package = new();
+            package.Write(ShieldReflectProtocolVersion);
+            package.Write(EventId);
+            package.Write(ProjectileId);
+            package.Write(TargetId);
+            package.Write(ProjectileOwnerPeerId);
+            HitData hit = Hit.Clone();
+            hit.Serialize(ref package);
+            ProjectileContext.Serialize(package);
+            package.SetPos(0);
+            return package;
         }
 
-        public string Serialize()
+        internal static bool TryDeserialize(ZPackage package, out ShieldReflectDamageEnvelope envelope)
         {
-            if (!IsValid)
+            envelope = default;
+            try
             {
-                return string.Empty;
-            }
-
-            return string.Join(
-                Separator.ToString(),
-                Version.ToString(CultureInfo.InvariantCulture),
-                ProjectilePrefabName,
-                Format(Velocity.x),
-                Format(Velocity.y),
-                Format(Velocity.z),
-                Format(HitNoise),
-                Format(Damage.m_damage),
-                Format(Damage.m_blunt),
-                Format(Damage.m_slash),
-                Format(Damage.m_pierce),
-                Format(Damage.m_chop),
-                Format(Damage.m_pickaxe),
-                Format(Damage.m_fire),
-                Format(Damage.m_frost),
-                Format(Damage.m_lightning),
-                Format(Damage.m_poison),
-                Format(Damage.m_spirit),
-                Format(AttackForce),
-                Format(BackstabBonus),
-                StatusEffectHash.ToString(CultureInfo.InvariantCulture),
-                Blockable ? "1" : "0",
-                Dodgeable ? "1" : "0");
-        }
-
-        public static bool TryParse(string payload, out ShieldReflectProjectilePayload parsed)
-        {
-            parsed = default;
-            if (string.IsNullOrWhiteSpace(payload))
-            {
-                return false;
-            }
-
-            string[] fields = payload.Split(Separator);
-            if (fields.Length != FieldCount ||
-                !int.TryParse(fields[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int version) ||
-                version != Version ||
-                string.IsNullOrWhiteSpace(fields[1]))
-            {
-                return false;
-            }
-
-            if (!TryParseFloat(fields[2], out float velocityX) ||
-                !TryParseFloat(fields[3], out float velocityY) ||
-                !TryParseFloat(fields[4], out float velocityZ) ||
-                !TryParseFloat(fields[5], out float hitNoise) ||
-                !TryParseFloat(fields[6], out float damage) ||
-                !TryParseFloat(fields[7], out float blunt) ||
-                !TryParseFloat(fields[8], out float slash) ||
-                !TryParseFloat(fields[9], out float pierce) ||
-                !TryParseFloat(fields[10], out float chop) ||
-                !TryParseFloat(fields[11], out float pickaxe) ||
-                !TryParseFloat(fields[12], out float fire) ||
-                !TryParseFloat(fields[13], out float frost) ||
-                !TryParseFloat(fields[14], out float lightning) ||
-                !TryParseFloat(fields[15], out float poison) ||
-                !TryParseFloat(fields[16], out float spirit) ||
-                !TryParseFloat(fields[17], out float attackForce) ||
-                !TryParseFloat(fields[18], out float backstabBonus) ||
-                !int.TryParse(fields[19], NumberStyles.Integer, CultureInfo.InvariantCulture, out int statusEffectHash))
-            {
-                return false;
-            }
-
-            parsed = new ShieldReflectProjectilePayload(
-                fields[1],
-                new Vector3(velocityX, velocityY, velocityZ),
-                hitNoise,
-                new HitData.DamageTypes
+                package.SetPos(0);
+                if (package.ReadInt() != ShieldReflectProtocolVersion)
                 {
-                    m_damage = damage,
-                    m_blunt = blunt,
-                    m_slash = slash,
-                    m_pierce = pierce,
-                    m_chop = chop,
-                    m_pickaxe = pickaxe,
-                    m_fire = fire,
-                    m_frost = frost,
-                    m_lightning = lightning,
-                    m_poison = poison,
-                    m_spirit = spirit
-                },
-                attackForce,
-                backstabBonus,
-                fields[20] == "1",
-                fields[21] == "1",
-                statusEffectHash);
-            return parsed.IsValid;
+                    return false;
+                }
+
+                long eventId = package.ReadLong();
+                ZDOID projectileId = package.ReadZDOID();
+                ZDOID targetId = package.ReadZDOID();
+                long projectileOwnerPeerId = package.ReadLong();
+                HitData hit = new();
+                hit.Deserialize(ref package);
+                ShieldReflectProjectileContext projectileContext = ShieldReflectProjectileContext.Deserialize(package);
+                envelope = new ShieldReflectDamageEnvelope(
+                    eventId,
+                    projectileId,
+                    targetId,
+                    projectileOwnerPeerId,
+                    hit,
+                    projectileContext);
+                return true;
+            }
+            catch
+            {
+                envelope = default;
+                return false;
+            }
+        }
+    }
+
+    private readonly struct ShieldReflectEventKey : IEquatable<ShieldReflectEventKey>
+    {
+        internal ShieldReflectEventKey(
+            long senderPeerId,
+            long eventId,
+            ZDOID projectileId,
+            ZDOID targetId)
+        {
+            SenderPeerId = senderPeerId;
+            EventId = eventId;
+            ProjectileId = projectileId;
+            TargetId = targetId;
         }
 
-        private static string Format(float value)
+        private long SenderPeerId { get; }
+
+        private long EventId { get; }
+
+        private ZDOID ProjectileId { get; }
+
+        private ZDOID TargetId { get; }
+
+        public bool Equals(ShieldReflectEventKey other)
         {
-            return value.ToString("R", CultureInfo.InvariantCulture);
+            return SenderPeerId == other.SenderPeerId &&
+                   EventId == other.EventId &&
+                   ProjectileId == other.ProjectileId &&
+                   TargetId == other.TargetId;
         }
 
-        private static bool TryParseFloat(string value, out float parsed)
+        public override bool Equals(object? obj)
         {
-            return float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed);
+            return obj is ShieldReflectEventKey other && Equals(other);
         }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hashCode = SenderPeerId.GetHashCode();
+                hashCode = (hashCode * 397) ^ EventId.GetHashCode();
+                hashCode = (hashCode * 397) ^ ProjectileId.GetHashCode();
+                return (hashCode * 397) ^ TargetId.GetHashCode();
+            }
+        }
+    }
+
+    internal sealed class ShieldReflectDamageScope
+    {
+        internal ShieldReflectDamageScope(
+            Player player,
+            ZDOID targetId,
+            long originalSenderPeerId,
+            ShieldReflectProjectileContext projectileContext,
+            bool reflectionEnabled,
+            string source)
+        {
+            Player = player;
+            TargetId = targetId;
+            OriginalSenderPeerId = originalSenderPeerId;
+            ProjectileContext = projectileContext;
+            ReflectionEnabled = reflectionEnabled;
+            Source = source;
+        }
+
+        internal Player Player { get; }
+
+        internal ZDOID TargetId { get; }
+
+        internal long OriginalSenderPeerId { get; }
+
+        internal ShieldReflectProjectileContext ProjectileContext { get; }
+
+        internal bool ReflectionEnabled { get; }
+
+        internal string Source { get; }
+
+        internal HitData? BoundHit { get; set; }
+
+        internal bool RpcBound { get; set; }
     }
 
     private static string ResolveProjectilePrefabName(Projectile projectile)
@@ -943,56 +1054,36 @@ internal static partial class SecondaryAttackManager
         return projectile != null ? Utils.GetPrefabName(projectile.gameObject) : string.Empty;
     }
 
-    private sealed class PendingShieldReflectState
+    private static void WriteDamage(ZPackage package, HitData.DamageTypes damage)
     {
-        public List<PendingShieldReflectContext> Contexts { get; } = new(ShieldReflectMaxPendingContextsPerPlayer);
+        package.Write(damage.m_damage);
+        package.Write(damage.m_blunt);
+        package.Write(damage.m_slash);
+        package.Write(damage.m_pierce);
+        package.Write(damage.m_chop);
+        package.Write(damage.m_pickaxe);
+        package.Write(damage.m_fire);
+        package.Write(damage.m_frost);
+        package.Write(damage.m_lightning);
+        package.Write(damage.m_poison);
+        package.Write(damage.m_spirit);
     }
 
-    private sealed class PendingShieldReflectBlockState
+    private static HitData.DamageTypes ReadDamage(ZPackage package)
     {
-        public List<PendingShieldReflectBlock> Blocks { get; } = new(ShieldReflectMaxPendingBlocksPerPlayer);
-    }
-
-    private readonly struct PendingShieldReflectContext
-    {
-        public PendingShieldReflectContext(ZDOID projectileId, ShieldReflectProjectileContext context, float expiresAt)
+        return new HitData.DamageTypes
         {
-            ProjectileId = projectileId;
-            Context = context;
-            ExpiresAt = expiresAt;
-        }
-
-        public ZDOID ProjectileId { get; }
-
-        public ShieldReflectProjectileContext Context { get; }
-
-        public float ExpiresAt { get; }
-    }
-
-    private readonly struct PendingShieldReflectBlock
-    {
-        public PendingShieldReflectBlock(
-            ItemDrop.ItemData blocker,
-            SecondaryAttackDefinition definition,
-            Vector3 hitPoint,
-            float vanillaBlockStaminaCost,
-            float expiresAt)
-        {
-            Blocker = blocker;
-            Definition = definition;
-            HitPoint = hitPoint;
-            VanillaBlockStaminaCost = vanillaBlockStaminaCost;
-            ExpiresAt = expiresAt;
-        }
-
-        public ItemDrop.ItemData Blocker { get; }
-
-        public SecondaryAttackDefinition Definition { get; }
-
-        public Vector3 HitPoint { get; }
-
-        public float VanillaBlockStaminaCost { get; }
-
-        public float ExpiresAt { get; }
+            m_damage = package.ReadSingle(),
+            m_blunt = package.ReadSingle(),
+            m_slash = package.ReadSingle(),
+            m_pierce = package.ReadSingle(),
+            m_chop = package.ReadSingle(),
+            m_pickaxe = package.ReadSingle(),
+            m_fire = package.ReadSingle(),
+            m_frost = package.ReadSingle(),
+            m_lightning = package.ReadSingle(),
+            m_poison = package.ReadSingle(),
+            m_spirit = package.ReadSingle()
+        };
     }
 }
