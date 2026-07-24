@@ -60,7 +60,7 @@ internal sealed class KeyHintCell
             : null;
     }
 
-    internal void Set(string label, IReadOnlyList<string> keys, float preferredTextWidth = 0f, bool hideExtraTexts = false)
+    internal void Set(string label, IReadOnlyList<string> keys, bool hideExtraTexts = false)
     {
         EnsureKeyCount(keys.Count);
         Root.SetActive(true);
@@ -68,10 +68,6 @@ internal sealed class KeyHintCell
         if (_label != null)
         {
             SetText(_label, label);
-            if (preferredTextWidth > 0f && _label.TryGetComponent(out LayoutElement layoutElement))
-            {
-                layoutElement.preferredWidth = preferredTextWidth;
-            }
         }
 
         for (int i = 0; i < _keys.Count; i++)
@@ -174,11 +170,16 @@ internal sealed class KeyHintCell
         Transform parent = template.transform.parent;
         while (_keys.Count < count)
         {
+            int previousKeyCount = _keys.Count;
             GameObject clone = Object.Instantiate(template, parent, false);
             clone.name = _keys.Count == 1 ? "key_bkg (1)" : $"key_bkg ({_keys.Count})";
             RefreshChildren();
-            if (_keys.Count == 0)
+            if (_keys.Count <= previousKeyCount)
             {
+                clone.SetActive(false);
+                clone.transform.SetParent(null, false);
+                Object.Destroy(clone);
+                RefreshChildren();
                 break;
             }
         }

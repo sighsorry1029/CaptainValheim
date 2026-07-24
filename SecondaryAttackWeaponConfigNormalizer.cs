@@ -7,11 +7,11 @@ internal static class SecondaryAttackWeaponConfigNormalizer
 {
     private const string GlobalFallbackKey = "Global";
 
-    internal static NormalizedSecondaryAttackConfigFile Normalize(
+    internal static SecondaryAttackCompiledSnapshot Normalize(
         IReadOnlyDictionary<string, ShieldWeaponConfig> shields)
     {
-        Dictionary<string, NormalizedWeaponConfig> normalizedWeapons = new(StringComparer.OrdinalIgnoreCase);
-        NormalizedWeaponConfig builtInShieldFallback = CreateGlobalDefaultShieldFallback();
+        Dictionary<string, NormalizedShieldModeConfig> normalizedShields = new(StringComparer.OrdinalIgnoreCase);
+        NormalizedShieldModeConfig builtInShieldFallback = CreateGlobalDefaultShieldFallback();
 
         ShieldWeaponConfig? rawGlobalShieldFallback = null;
         foreach ((string prefabName, ShieldWeaponConfig shieldConfig) in shields)
@@ -28,10 +28,9 @@ internal static class SecondaryAttackWeaponConfigNormalizer
             }
         }
 
-        NormalizedWeaponConfig? globalShieldFallback = rawGlobalShieldFallback != null
+        NormalizedShieldModeConfig globalShieldFallback = rawGlobalShieldFallback != null
             ? FromShieldRaw(rawGlobalShieldFallback, builtInShieldFallback)
-            : null;
-        NormalizedWeaponConfig shieldFallback = globalShieldFallback ?? builtInShieldFallback;
+            : builtInShieldFallback;
 
         foreach ((string prefabName, ShieldWeaponConfig shieldConfig) in shields)
         {
@@ -46,37 +45,29 @@ internal static class SecondaryAttackWeaponConfigNormalizer
                 continue;
             }
 
-            normalizedWeapons[normalizedPrefabName] = FromShieldRaw(shieldConfig, shieldFallback);
+            normalizedShields[normalizedPrefabName] = FromShieldRaw(shieldConfig, globalShieldFallback);
         }
 
-        return new NormalizedSecondaryAttackConfigFile
-        {
-            Weapons = normalizedWeapons,
-            GlobalShieldFallback = globalShieldFallback
-        };
+        return new SecondaryAttackCompiledSnapshot(normalizedShields, globalShieldFallback);
     }
 
-    public static NormalizedWeaponConfig FromShieldRaw(ShieldWeaponConfig raw, NormalizedWeaponConfig? fallback = null)
+    internal static NormalizedShieldModeConfig FromShieldRaw(
+        ShieldWeaponConfig raw,
+        NormalizedShieldModeConfig? fallback = null)
     {
         fallback ??= CreateGlobalDefaultShieldFallback();
-        return new NormalizedWeaponConfig
-        {
-            Shield = NormalizeShield(raw, fallback.Shield ?? new NormalizedShieldModeConfig())
-        };
+        return NormalizeShield(raw, fallback);
     }
 
-    public static NormalizedWeaponConfig CreateGlobalDefaultShieldFallback()
+    internal static NormalizedShieldModeConfig CreateGlobalDefaultShieldFallback()
     {
-        return new NormalizedWeaponConfig
+        return new NormalizedShieldModeConfig
         {
-            Shield = new NormalizedShieldModeConfig
-            {
-                PrimaryAttack = new NormalizedShieldPrimaryAttackConfig(),
-                Throw = new NormalizedShieldThrowConfig(),
-                Charge = new NormalizedShieldChargeConfig(),
-                Reflect = new NormalizedShieldReflectConfig(),
-                BlockCharge = new NormalizedShieldBlockChargeConfig()
-            }
+            PrimaryAttack = new NormalizedShieldPrimaryAttackConfig(),
+            Throw = new NormalizedShieldThrowConfig(),
+            Charge = new NormalizedShieldChargeConfig(),
+            Reflect = new NormalizedShieldReflectConfig(),
+            BlockCharge = new NormalizedShieldBlockChargeConfig()
         };
     }
 
@@ -112,8 +103,7 @@ internal static class SecondaryAttackWeaponConfigNormalizer
             DamageFactor = rawPrimaryAttack.DamageFactor ?? baseConfig.DamageFactor,
             PushFactor = rawPrimaryAttack.PushFactor ?? baseConfig.PushFactor,
             StaminaFactor = rawPrimaryAttack.StaminaFactor ?? baseConfig.StaminaFactor,
-            DurabilityFactor = rawPrimaryAttack.DurabilityFactor ?? baseConfig.DurabilityFactor,
-            AdrenalineFactor = ShieldAdrenalineFactors.PrimaryAttack
+            DurabilityFactor = rawPrimaryAttack.DurabilityFactor ?? baseConfig.DurabilityFactor
         };
     }
 
@@ -144,8 +134,7 @@ internal static class SecondaryAttackWeaponConfigNormalizer
             Targets = rawThrow.Targets ?? baseConfig.Targets,
             DamageDecay = rawThrow.DamageDecay ?? baseConfig.DamageDecay,
             RadiusFactor = rawThrow.RadiusFactor ?? baseConfig.RadiusFactor,
-            TtlFactor = rawThrow.TtlFactor ?? baseConfig.TtlFactor,
-            AdrenalineFactor = ShieldAdrenalineFactors.Throw
+            TtlFactor = rawThrow.TtlFactor ?? baseConfig.TtlFactor
         };
     }
 
@@ -174,8 +163,7 @@ internal static class SecondaryAttackWeaponConfigNormalizer
             Cooldown = rawCharge.Cooldown ?? baseConfig.Cooldown,
             CooldownReductionFactor = rawCharge.CooldownReductionFactor ?? baseConfig.CooldownReductionFactor,
             DurabilityFactor = rawCharge.DurabilityFactor ?? baseConfig.DurabilityFactor,
-            HitRadiusFactor = rawCharge.HitRadiusFactor ?? baseConfig.HitRadiusFactor,
-            AdrenalineFactor = ShieldAdrenalineFactors.Charge
+            HitRadiusFactor = rawCharge.HitRadiusFactor ?? baseConfig.HitRadiusFactor
         };
     }
 

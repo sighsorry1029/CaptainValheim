@@ -5,13 +5,13 @@ using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
 using Object = UnityEngine.Object;
-using ProjectileLaunchData = CaptainValheim.ProjectileRuntimeSystem.ProjectileLaunchData;
 
 namespace CaptainValheim;
 
 internal static partial class SecondaryAttackManager
 {
     private static readonly ConditionalWeakTable<Character, AsyncSecondaryActivityState> AsyncSecondaryActivityStates = new();
+    private static readonly HashSet<string> ReportedCompatibilityWarnings = new(StringComparer.OrdinalIgnoreCase);
     private static readonly MethodInfo MemberwiseCloneMethod = AccessTools.Method(typeof(object), "MemberwiseClone")!;
     private static int AimRayMask;
     private static int ShieldChargeCollisionMask;
@@ -19,7 +19,7 @@ internal static partial class SecondaryAttackManager
 
     internal static bool TryMarkCompatibilityWarningReported(string warningKey)
     {
-        return SecondaryAttackWarningLog.TryMarkWarning(warningKey);
+        return ReportedCompatibilityWarnings.Add(warningKey);
     }
 
     internal static Attack CloneAttack(Attack? sourceAttack)
@@ -212,19 +212,6 @@ internal static partial class SecondaryAttackManager
         }
 
         return ShieldChargeImpactMask;
-    }
-
-    internal static float ResolveProjectileSpeed(ProjectileLaunchData launchData)
-    {
-        float speed = launchData.UseRandomVelocity
-            ? UnityEngine.Random.Range(launchData.ProjectileVelocityMin, launchData.ProjectileVelocity)
-            : launchData.ProjectileVelocity;
-        return Mathf.Max(0.01f, speed);
-    }
-
-    internal static Character? GetHitCharacter(Collider collider)
-    {
-        return ProjectileRuntimeSystem.GetHitCharacter(collider);
     }
 
     internal static Vector3 GetSentinelForward(Character owner)

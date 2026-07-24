@@ -10,7 +10,7 @@ CaptainValheim lets a shield act as a real close-range weapon instead of only a 
 ![](https://i.ibb.co/bRWn3Vjt/richochetshield.gif) <br>
 
 **Shield Throw**  
-Throw your shield forward as a returning weapon. The throw can hit multiple targets, lose power through damage decay, search for nearby targets, and return after its lifetime expires. Damage, push force, target count, range, return speed, stamina cost, durability cost, and cooldown can all be tuned, while the final result still scales from the shield you actually equipped.
+Throw your shield forward as a returning weapon. The throw can hit multiple targets, lose power through damage decay, search for nearby targets, and return after its lifetime expires. Damage, push force, target count, damage decay, ricochet search radius, flight lifetime, stamina cost, and durability cost can all be tuned, while the final result still scales from the shield you actually equipped.
 
 ![](https://i.ibb.co/ZpmyTscz/shieldbash.gif) <br>
 
@@ -74,6 +74,12 @@ ShieldCarapaceBuckler:
 ```
 
 Set a mode block's `enabled: false` to disable that feature after inheritance.
+
+## Localization
+
+The package includes `CaptainValheim.English.yml` as a translation template. Copy it beside `CaptainValheim.dll`, translate only the values while keeping every key unchanged, and rename it to `CaptainValheim.<Valheim language>.yml`. For example, a Turkish translation must be named `CaptainValheim.Turkish.yml`.
+
+Save translation files as UTF-8, then restart Valheim or reselect the language after changing a file. Localization is client-local, so each player can use a different language file; missing files or values fall back to the built-in English text.
 
 ## Compatibility
 

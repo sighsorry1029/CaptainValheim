@@ -4,9 +4,63 @@ using UnityEngine;
 
 namespace CaptainValheim;
 
+internal sealed class CaptainValheimCharacterRpc : MonoBehaviour
+{
+    private static readonly string ShieldReflectDamageRpcName =
+        $"CaptainValheim_DeliverShieldReflectDamageV{SecondaryAttackManager.ShieldReflectProtocolVersion}";
+
+    private Character _character = null!;
+    private ZNetView? _nview;
+    private bool _rpcRegistered;
+
+    private void Awake()
+    {
+        _character = GetComponent<Character>();
+        _nview = GetComponent<ZNetView>();
+        TryRegisterAndAdvertiseProtocol();
+    }
+
+    private void Start()
+    {
+        TryRegisterAndAdvertiseProtocol();
+    }
+
+    private void TryRegisterAndAdvertiseProtocol()
+    {
+        if (!_rpcRegistered)
+        {
+            if (_nview == null || !_nview.IsValid())
+            {
+                return;
+            }
+
+            _nview.Register<ZPackage>(ShieldReflectDamageRpcName, RPC_ShieldReflectDamage);
+            _rpcRegistered = true;
+        }
+
+        if (_character is Player player)
+        {
+            SecondaryAttackManager.AdvertiseShieldReflectProtocol(player, _nview);
+        }
+    }
+
+    internal static void SendShieldReflectDamage(ZNetView targetNView, ZPackage package)
+    {
+        targetNView.InvokeRPC(ShieldReflectDamageRpcName, package);
+    }
+
+    private void RPC_ShieldReflectDamage(long sender, ZPackage package)
+    {
+        if (_character is Player player)
+        {
+            SecondaryAttackManager.ReceiveRemoteShieldReflectDamage(player, _nview, sender, package);
+        }
+    }
+}
+
 internal static partial class SecondaryAttackManager
 {
-    private const int ShieldReflectProtocolVersion = 2;
+    internal const int ShieldReflectProtocolVersion = 2;
     private const string ShieldReflectProtocolZdoKey = "CaptainValheim_ShieldReflectProtocol";
     private const int ShieldReflectDeliveredEventLimit = 512;
 
@@ -114,7 +168,7 @@ internal static partial class SecondaryAttackManager
         if (projectile == null ||
             projectileHit.Water ||
             hit.m_hitCollider == null ||
-            GetHitCharacter(hit.m_hitCollider) != targetPlayer ||
+            ProjectileAccess.GetHitCharacter(hit.m_hitCollider) != targetPlayer ||
             ShieldRuntimeSystem.IsReflectedProjectile(projectile))
         {
             return false;
@@ -325,7 +379,7 @@ internal static partial class SecondaryAttackManager
             return context;
         }
 
-        if (!SecondaryAttackRuntimeFacade.TryGetDefinition(blocker, out SecondaryAttackDefinition definition) ||
+        if (!ShieldRuntimeSystem.TryGetDefinition(blocker, out SecondaryAttackDefinition definition) ||
             !definition.ShieldProjectileReflect)
         {
             return context;
@@ -561,7 +615,7 @@ internal static partial class SecondaryAttackManager
             Vector3 fallbackDirection = incomingVelocity.sqrMagnitude > 0.001f
                 ? Vector3.Reflect(incomingVelocity.normalized, normal)
                 : player.GetLookDir();
-            Vector3 aimDirection = ShieldRuntimeSystem.ResolvePlayerAimDirectionForReflection(
+            Vector3 aimDirection = ShieldRuntimeSystem.ResolvePlayerAimDirection(
                 player,
                 spawnPoint,
                 fallbackDirection,

@@ -2,9 +2,37 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using UnityEngine;
-using ProjectileLaunchData = CaptainValheim.ProjectileRuntimeSystem.ProjectileLaunchData;
 
 namespace CaptainValheim;
+
+internal readonly struct ProjectileLaunchData
+{
+    internal ProjectileLaunchData(
+        GameObject? projectilePrefab,
+        float projectileVelocity,
+        float projectileVelocityMin,
+        float attackHitNoise,
+        bool useRandomVelocity)
+    {
+        ProjectilePrefab = projectilePrefab;
+        ProjectileVelocity = projectileVelocity;
+        ProjectileVelocityMin = projectileVelocityMin;
+        AttackHitNoise = attackHitNoise;
+        UseRandomVelocity = useRandomVelocity;
+    }
+
+    internal GameObject? ProjectilePrefab { get; }
+
+    internal float ProjectileVelocity { get; }
+
+    internal float ProjectileVelocityMin { get; }
+
+    internal float AttackHitNoise { get; }
+
+    internal bool UseRandomVelocity { get; }
+
+    internal bool IsValid => ProjectilePrefab != null;
+}
 
 internal static partial class ShieldRuntimeSystem
 {
@@ -33,9 +61,7 @@ internal static partial class ShieldRuntimeSystem
     private const float ShieldThrowDefaultHitRadius = 0.7f;
     private const float ShieldThrowCatapultProjectileSpeed = 18f;
 
-    private static readonly ConditionalWeakTable<Projectile, ShieldProjectileController> ShieldProjectileControllers = new();
     private static readonly ConditionalWeakTable<Projectile, ReflectedProjectileState> ReflectedProjectiles = new();
-    private static readonly ConditionalWeakTable<Attack, ShieldChargeAttackState> ShieldChargeAttackStates = new();
     private static readonly ConditionalWeakTable<Character, ShieldChargeRuntimeState> ShieldChargeRuntimeStates = new();
     private static readonly ConditionalWeakTable<Humanoid, ShieldStartOverrideState> ShieldStartOverrides = new();
     private static readonly ConditionalWeakTable<Humanoid, ReturnedShieldEquipState> ReturnedShieldEquipStates = new();
@@ -46,24 +72,23 @@ internal static partial class ShieldRuntimeSystem
     private static readonly List<ShieldImpactTarget> ShieldChargeImpactTargets = [];
     private static readonly List<Collider> ShieldChargeTargetColliders = [];
     private static readonly RaycastHit[] AimRayHits = new RaycastHit[64];
-    private static ProjectileLaunchData _shieldThrowTemplateLaunchData = ProjectileLaunchData.Invalid;
+    private static ProjectileLaunchData _shieldThrowTemplateLaunchData;
     private static string _shieldThrowTemplateSource = string.Empty;
 
     internal static void ResetTransientState()
     {
-        _shieldThrowTemplateLaunchData = ProjectileLaunchData.Invalid;
+        _shieldThrowTemplateLaunchData = default;
         _shieldThrowTemplateSource = string.Empty;
     }
 
-    internal static bool CanStartShieldCharge(Humanoid humanoid, SecondaryAttackDefinition? definition = null)
+    internal static bool CanStartShieldCharge(Humanoid humanoid)
     {
         if (humanoid == null || IsShieldChargeActive(humanoid))
         {
             return false;
         }
 
-        if (definition == null ||
-            !ShieldChargeRuntimeStates.TryGetValue(humanoid, out ShieldChargeRuntimeState? state))
+        if (!ShieldChargeRuntimeStates.TryGetValue(humanoid, out ShieldChargeRuntimeState? state))
         {
             return true;
         }
@@ -81,6 +106,17 @@ internal static partial class ShieldRuntimeSystem
 
         weapon = state.Weapon;
         return true;
+    }
+
+    internal static bool TryGetDefinition(
+        ItemDrop.ItemData weapon,
+        out SecondaryAttackDefinition definition)
+    {
+        definition = null!;
+        return weapon?.m_dropPrefab != null &&
+               SecondaryAttackFacade.CurrentAppliedWorldSnapshot.DefinitionsByPrefabName.TryGetValue(
+                   weapon.m_dropPrefab.name,
+                   out definition!);
     }
 
     internal static void UpdateReturnedShieldAutoEquip(Humanoid humanoid)
@@ -120,16 +156,91 @@ internal static partial class ShieldRuntimeSystem
         ReturnedShieldEquipStates.Add(humanoid, new ReturnedShieldEquipState(shield));
     }
 
-    internal static void BeginShieldPrimaryStart(Humanoid humanoid, ItemDrop.ItemData shieldWeapon)
+    internal static bool HandleStartAttackPrefix(
+        Humanoid humanoid,
+        bool secondaryAttack,
+        ref bool result,
+        ItemDrop.ItemData leftItem,
+        ItemDrop.ItemData rightItem)
+    {
+        if (IsShieldChargeActive(humanoid))
+        {
+            result = false;
+            return false;
+        }
+
+        if (!secondaryAttack)
+        {
+            if (TryGetShieldOnlyPrimary(
+                    humanoid,
+                    leftItem,
+                    rightItem,
+                    out ItemDrop.ItemData shieldWeapon,
+                    out SecondaryAttackDefinition definition))
+            {
+                BeginShieldPrimaryStart(humanoid, shieldWeapon, definition);
+            }
+
+            return true;
+        }
+
+        if (!TryGetShieldOnlySecondary(
+                humanoid,
+                leftItem,
+                rightItem,
+                out ItemDrop.ItemData secondaryShieldWeapon,
+                out SecondaryAttackDefinition secondaryDefinition))
+        {
+            return true;
+        }
+
+        ShieldSpecialMode mode = humanoid is Player player
+            ? ResolveShieldSpecialMode(player, secondaryDefinition)
+            : ShieldSpecialMode.Throw;
+
+        if (mode != ShieldSpecialMode.Charge)
+        {
+            BeginShieldSecondaryStart(
+                humanoid,
+                secondaryShieldWeapon,
+                secondaryDefinition,
+                mode);
+            return true;
+        }
+
+        if (!CanStartShieldCharge(humanoid))
+        {
+            result = false;
+            return false;
+        }
+
+        result = TryStartShieldChargeDirect(
+            humanoid,
+            secondaryShieldWeapon,
+            secondaryDefinition);
+        return false;
+    }
+
+    private static void BeginShieldPrimaryStart(
+        Humanoid humanoid,
+        ItemDrop.ItemData shieldWeapon,
+        SecondaryAttackDefinition definition)
     {
         ShieldStartOverrides.Remove(humanoid);
-        ShieldStartOverrideState state = new(shieldWeapon, ShieldSpecialMode.PrimaryAttack, secondaryAttack: false);
+        ShieldStartOverrideState state = new(
+            shieldWeapon,
+            definition,
+            ShieldSpecialMode.PrimaryAttack,
+            secondaryAttack: false);
         Attack sourceAttack = humanoid.m_unarmedWeapon != null
             ? SecondaryAttackManager.CloneAttack(humanoid.m_unarmedWeapon.m_itemData.m_shared.m_attack)
             : SecondaryAttackManager.CloneAttack(shieldWeapon.m_shared.m_attack);
 
-        if (SecondaryAttackRuntimeFacade.TryGetDefinition(shieldWeapon, out SecondaryAttackDefinition definition) &&
-            TryCalculateShieldSpecialRawStaminaCost(shieldWeapon, definition, ShieldSpecialMode.PrimaryAttack, out float rawAttackStamina))
+        if (TryCalculateShieldSpecialRawStaminaCost(
+                shieldWeapon,
+                definition,
+                ShieldSpecialMode.PrimaryAttack,
+                out float rawAttackStamina))
         {
             sourceAttack.m_attackStamina = rawAttackStamina;
         }
@@ -138,14 +249,22 @@ internal static partial class ShieldRuntimeSystem
         ShieldStartOverrides.Add(humanoid, state);
     }
 
-    internal static void BeginShieldSecondaryStart(Humanoid humanoid, ItemDrop.ItemData shieldWeapon, ShieldSpecialMode mode)
+    private static void BeginShieldSecondaryStart(
+        Humanoid humanoid,
+        ItemDrop.ItemData shieldWeapon,
+        SecondaryAttackDefinition definition,
+        ShieldSpecialMode mode)
     {
-        BeginShieldAttackStart(humanoid, shieldWeapon, mode, secondaryAttack: true);
+        BeginShieldAttackStart(humanoid, shieldWeapon, definition, mode, secondaryAttack: true);
     }
 
     internal static bool TryStartShieldChargeDirect(Humanoid humanoid, ItemDrop.ItemData shieldWeapon, SecondaryAttackDefinition definition)
     {
-        if (humanoid == null || shieldWeapon == null || definition?.ShieldSpecial is not { } behavior || !behavior.HasShieldCharge)
+        if (humanoid == null ||
+            shieldWeapon == null ||
+            definition?.ShieldSpecial is not { } behavior ||
+            !behavior.HasShieldCharge ||
+            behavior.ShieldChargeDistance <= 0f)
         {
             return false;
         }
@@ -167,27 +286,26 @@ internal static partial class ShieldRuntimeSystem
         }
 
         SecondaryAttackRuntimeContext.SetActiveAttack(attack, new ActiveSecondaryAttack(definition, ShieldSpecialMode.Charge));
-        SecondaryAttackAdrenalineSystem.Reset(attack);
+        SecondaryAttackRuntimeContext.ResetAdrenaline(attack);
         SecondaryAttackManager.PlayTriggeredAttackEffects(attack, behavior.ShieldChargeDurabilityFactor);
         StartShieldCharge(attack, definition);
         return true;
     }
 
-    internal static bool EndShieldAttackStart(Humanoid humanoid, bool startedAttack)
+    internal static void EndShieldAttackStart(Humanoid humanoid, bool startedAttack)
     {
         if (!ShieldStartOverrides.TryGetValue(humanoid, out ShieldStartOverrideState? state))
         {
-            return false;
+            return;
         }
 
-        state.RestoreAnimationOverride();
+        state.Restore();
         if (startedAttack && humanoid.m_currentAttack != null)
         {
-            SecondaryAttackRuntimeFacade.RegisterActiveAttack(humanoid.m_currentAttack, state.Weapon, state.Mode);
+            RegisterActiveAttack(humanoid.m_currentAttack, state.Definition, state.Mode);
         }
 
         ShieldStartOverrides.Remove(humanoid);
-        return true;
     }
 
     internal static bool TryGetShieldOnlyPrimary(Humanoid humanoid, ItemDrop.ItemData? leftItem, ItemDrop.ItemData? rightItem, out ItemDrop.ItemData weapon, out SecondaryAttackDefinition definition)
@@ -208,7 +326,9 @@ internal static partial class ShieldRuntimeSystem
         }
 
         ShieldSpecialSecondaryBehavior? behavior = definition.ShieldSpecial;
-        return behavior != null && (behavior.HasShieldThrow || behavior.HasShieldCharge);
+        return behavior != null &&
+               (behavior.HasShieldThrow ||
+                (behavior.HasShieldCharge && behavior.ShieldChargeDistance > 0f));
     }
 
     internal static ShieldSpecialMode ResolveShieldSpecialMode(Player player, SecondaryAttackDefinition definition)
@@ -239,7 +359,57 @@ internal static partial class ShieldRuntimeSystem
         return ShieldSpecialMode.Throw;
     }
 
-    internal static void TriggerShieldSpecialFromRuntimeFacade(Attack attack, ActiveSecondaryAttack activeAttack)
+    internal static void RegisterActiveAttack(
+        Attack attack,
+        SecondaryAttackDefinition definition,
+        ShieldSpecialMode shieldMode)
+    {
+        if (attack == null || definition?.ShieldSpecial == null)
+        {
+            return;
+        }
+
+        ActiveSecondaryAttack activeAttack = new(definition, shieldMode);
+        SecondaryAttackRuntimeContext.SetActiveAttack(attack, activeAttack);
+        SecondaryAttackRuntimeContext.ResetAdrenaline(attack);
+        if (shieldMode == ShieldSpecialMode.Charge)
+        {
+            TriggerShieldSpecial(attack, activeAttack);
+        }
+    }
+
+    internal static bool TryHandleCustomAttackTrigger(
+        Attack attack,
+        out ShieldPrimaryTriggerState primaryTriggerState)
+    {
+        primaryTriggerState = default;
+        if (!SecondaryAttackRuntimeContext.TryGetActiveAttack(attack, out ActiveSecondaryAttack? activeAttack) ||
+            activeAttack == null ||
+            activeAttack.Definition.ShieldSpecial == null)
+        {
+            return false;
+        }
+
+        if (attack.m_character.IsStaggering())
+        {
+            return true;
+        }
+
+        if (activeAttack.ShieldMode == ShieldSpecialMode.PrimaryAttack)
+        {
+            BeginShieldPrimaryVanillaTrigger(attack, activeAttack, out primaryTriggerState);
+            return false;
+        }
+
+        if (!activeAttack.Triggered)
+        {
+            TriggerShieldSpecial(attack, activeAttack);
+        }
+
+        return true;
+    }
+
+    private static void TriggerShieldSpecial(Attack attack, ActiveSecondaryAttack activeAttack)
     {
         if (activeAttack.Triggered)
         {
@@ -360,24 +530,26 @@ internal static partial class ShieldRuntimeSystem
         return effects != null && effects.HasEffects();
     }
 
-    internal static Vector3 ResolvePlayerAimDirectionForReflection(Player player, Vector3 spawnPoint, Vector3 fallbackAimDirection, float maxTravelDistance)
-    {
-        return ResolvePlayerAimDirection(player, spawnPoint, fallbackAimDirection, maxTravelDistance);
-    }
-
-    private static void BeginShieldAttackStart(Humanoid humanoid, ItemDrop.ItemData shieldWeapon, ShieldSpecialMode mode, bool secondaryAttack)
+    private static void BeginShieldAttackStart(
+        Humanoid humanoid,
+        ItemDrop.ItemData shieldWeapon,
+        SecondaryAttackDefinition definition,
+        ShieldSpecialMode mode,
+        bool secondaryAttack)
     {
         ShieldStartOverrides.Remove(humanoid);
-        ShieldStartOverrideState state = new(shieldWeapon, mode, secondaryAttack);
-        SecondaryAttackRuntimeFacade.TryGetDefinition(shieldWeapon, out SecondaryAttackDefinition definition);
+        ShieldStartOverrideState state = new(shieldWeapon, definition, mode, secondaryAttack);
         string animationOverride = ResolveShieldAttackAnimationOverride(definition, mode);
         if (!string.IsNullOrWhiteSpace(animationOverride))
         {
             state.ApplyAnimationOverride(animationOverride);
         }
 
-        if (definition != null &&
-            TryCalculateShieldSpecialRawStaminaCost(shieldWeapon, definition, mode, out float rawAttackStamina))
+        if (TryCalculateShieldSpecialRawStaminaCost(
+                shieldWeapon,
+                definition,
+                mode,
+                out float rawAttackStamina))
         {
             state.ApplyAttackStaminaOverride(rawAttackStamina);
         }
@@ -385,14 +557,14 @@ internal static partial class ShieldRuntimeSystem
         ShieldStartOverrides.Add(humanoid, state);
     }
 
-    private static string ResolveShieldAttackAnimationOverride(SecondaryAttackDefinition? definition, ShieldSpecialMode mode)
+    private static string ResolveShieldAttackAnimationOverride(SecondaryAttackDefinition definition, ShieldSpecialMode mode)
     {
         if (mode != ShieldSpecialMode.Throw)
         {
             return string.Empty;
         }
 
-        ShieldSpecialSecondaryBehavior? behavior = definition?.ShieldSpecial;
+        ShieldSpecialSecondaryBehavior? behavior = definition.ShieldSpecial;
         return behavior != null && !string.IsNullOrWhiteSpace(behavior.ShieldThrowAnimation)
             ? behavior.ShieldThrowAnimation
             : "battleaxe_attack1";
@@ -433,7 +605,7 @@ internal static partial class ShieldRuntimeSystem
             return false;
         }
 
-        if (!SecondaryAttackRuntimeFacade.TryGetDefinition(leftItem, out definition) || definition.ShieldSpecial == null)
+        if (!TryGetDefinition(leftItem, out definition) || definition.ShieldSpecial == null)
         {
             return false;
         }
@@ -485,13 +657,134 @@ internal static partial class ShieldRuntimeSystem
                state.Active;
     }
 
-    private sealed class ReflectedProjectileState
+    private static float GetShieldBlockPower(Attack attack)
     {
+        return attack.m_weapon.GetBlockPower(
+            attack.m_character.GetSkillFactor(Skills.SkillType.Blocking));
     }
 
-    private sealed class ShieldChargeAttackState
+    private static bool CanShieldAttackHitCharacter(Attack attack, Character target)
     {
-        public System.Collections.Generic.HashSet<Character> HitTargets { get; } = new();
+        if (attack == null ||
+            attack.m_character == null ||
+            attack.m_weapon == null ||
+            target == null ||
+            target == attack.m_character)
+        {
+            return false;
+        }
+
+        Character attacker = attack.m_character;
+        bool isEnemy = BaseAI.IsEnemy(attacker, target) ||
+                       (target.GetBaseAI() is { } targetAi &&
+                        targetAi.IsAggravatable() &&
+                        attacker.IsPlayer());
+        if (((!attack.m_hitFriendly || attacker.IsTamed()) && !attacker.IsPlayer() && !isEnemy) ||
+            (!attack.m_weapon.m_shared.m_tamedOnly &&
+             attacker.IsPlayer() &&
+             !attacker.IsPVPEnabled() &&
+             !isEnemy) ||
+            (attack.m_weapon.m_shared.m_tamedOnly && !target.IsTamed()))
+        {
+            return false;
+        }
+
+        if (attack.m_weapon.m_shared.m_dodgeable && target.IsDodgeInvincible())
+        {
+            if (target is Player dodgingPlayer)
+            {
+                dodgingPlayer.HitWhileDodging();
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static HitData CreateShieldHitData(
+        Attack attack,
+        Vector3 direction,
+        Vector3 hitPoint,
+        float damage,
+        float pushForce)
+    {
+        HitData hitData = new()
+        {
+            m_toolTier = (short)attack.m_weapon.m_shared.m_toolTier,
+            m_pushForce = pushForce,
+            m_backstabBonus = attack.m_weapon.m_shared.m_backstabBonus,
+            m_staggerMultiplier = 1f,
+            m_blockable = attack.m_weapon.m_shared.m_blockable,
+            m_dodgeable = attack.m_weapon.m_shared.m_dodgeable,
+            m_skill = attack.m_weapon.m_shared.m_skillType,
+            m_skillRaiseAmount = attack.m_raiseSkillAmount,
+            m_skillLevel = attack.m_character.GetSkillLevel(attack.m_weapon.m_shared.m_skillType),
+            m_itemLevel = (short)attack.m_weapon.m_quality,
+            m_itemWorldLevel = (byte)attack.m_weapon.m_worldLevel,
+            m_point = hitPoint,
+            m_dir = direction.sqrMagnitude > 0.001f
+                ? direction.normalized
+                : SecondaryAttackManager.GetSentinelForward(attack.m_character),
+            m_healthReturn = attack.m_attackHealthReturnHit
+        };
+        hitData.m_damage.m_blunt = damage;
+        hitData.m_statusEffectHash = ResolveAttackStatusEffectHash(attack.m_weapon);
+        hitData.SetAttacker(attack.m_character);
+        hitData.m_hitType = attack.m_character is Player
+            ? HitData.HitType.PlayerHit
+            : HitData.HitType.EnemyHit;
+        attack.m_character.GetSEMan().ModifyAttack(
+            attack.m_weapon.m_shared.m_skillType,
+            ref hitData);
+        return hitData;
+    }
+
+    private static int ResolveAttackStatusEffectHash(ItemDrop.ItemData weapon)
+    {
+        StatusEffect statusEffect = weapon.m_shared.m_attackStatusEffect;
+        if (statusEffect == null)
+        {
+            return 0;
+        }
+
+        return weapon.m_shared.m_attackStatusEffectChance >= 1f ||
+               UnityEngine.Random.Range(0f, 1f) <
+               weapon.m_shared.m_attackStatusEffectChance
+            ? statusEffect.NameHash()
+            : 0;
+    }
+
+    private static void PlayShieldThrowChargeStartSfx(Attack attack)
+    {
+        if (attack?.m_character == null)
+        {
+            return;
+        }
+
+        GameObject? sfxPrefab =
+            ZNetScene.instance?.GetPrefab(ShieldThrowChargeStartSfxPrefabName);
+        if (sfxPrefab == null)
+        {
+            if (SecondaryAttackManager.TryMarkCompatibilityWarningReported(
+                    "shield_throw_charge_start_sfx_missing"))
+            {
+                CaptainValheimPlugin.ModLogger.LogWarning(
+                    $"Shield throw/charge start SFX prefab " +
+                    $"'{ShieldThrowChargeStartSfxPrefabName}' was not found.");
+            }
+
+            return;
+        }
+
+        Transform origin = attack.m_character.transform;
+        GameObject sfxInstance =
+            UnityEngine.Object.Instantiate(sfxPrefab, origin.position, origin.rotation);
+        UnityEngine.Object.Destroy(sfxInstance, 6f);
+    }
+
+    private sealed class ReflectedProjectileState
+    {
     }
 
     private sealed class ShieldChargeRuntimeState
@@ -595,14 +888,20 @@ internal static partial class ShieldRuntimeSystem
 
     private sealed class ShieldStartOverrideState
     {
-        public ShieldStartOverrideState(ItemDrop.ItemData weapon, ShieldSpecialMode mode, bool secondaryAttack)
+        public ShieldStartOverrideState(
+            ItemDrop.ItemData weapon,
+            SecondaryAttackDefinition definition,
+            ShieldSpecialMode mode,
+            bool secondaryAttack)
         {
             Weapon = weapon;
+            Definition = definition;
             Mode = mode;
             SecondaryAttack = secondaryAttack;
         }
 
         public ItemDrop.ItemData Weapon { get; }
+        public SecondaryAttackDefinition Definition { get; }
         public ShieldSpecialMode Mode { get; }
         public bool SecondaryAttack { get; }
 
@@ -635,7 +934,7 @@ internal static partial class ShieldRuntimeSystem
             TargetAttack.m_attackStamina = rawAttackStamina;
         }
 
-        public void RestoreAnimationOverride()
+        public void Restore()
         {
             if (OriginalAttack != null)
             {

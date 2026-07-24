@@ -12,7 +12,7 @@ namespace CaptainValheim;
 public class CaptainValheimPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CaptainValheim";
-    internal const string ModVersion = "1.0.6";
+    internal const string ModVersion = "1.0.7";
     internal const string Author = "sighsorry";
     private const string ModGUID = $"{Author}.{ModName}";
     private static string ConfigFileName = $"{ModGUID}.cfg";
@@ -23,9 +23,10 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     internal static PluginSettings Settings { get; } = new();
     private FileSystemWatcher? _watcher;
     private readonly object _reloadLock = new();
-    private DateTime _lastConfigReloadTime;
+    private DateTime _configReloadDueUtc;
+    private bool _hasPendingConfigReload;
     private string? _lastConfigFileText;
-    private const long RELOAD_DELAY = 10000000; // One second
+    private static readonly TimeSpan ConfigReloadDelay = TimeSpan.FromSeconds(1);
 
     public enum Toggle
     {
@@ -42,6 +43,7 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         _serverConfigLocked = Settings.General.LockConfiguration;
         _ = ConfigSync.AddLockingConfigEntry(_serverConfigLocked);
         PatchCaptainValheimHooks();
+        CaptainValheimLocalization.Load();
         SecondaryAttackFacade.Initialize();
         SetupWatcher();
 
@@ -53,11 +55,32 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         }
     }
 
+    private void Update()
+    {
+        TryReloadConfigValues();
+        SecondaryAttackFacade.TryApplyPendingConfig();
+    }
+
     private void OnDestroy()
     {
-        SecondaryAttackFacade.Dispose();
-        SaveWithRespectToConfigSet();
-        _watcher?.Dispose();
+        RunCleanup("secondary attack state", SecondaryAttackFacade.Dispose);
+        RunCleanup("configuration save", () => SaveWithRespectToConfigSet());
+        RunCleanup("configuration watcher", DisposeWatcher);
+        RunCleanup("shield key hints", ShieldOnlyKeyHintSystem.Dispose);
+        RunCleanup("shield compendium", ShieldTechniqueCompendiumManager.Dispose);
+        RunCleanup("Harmony patches", _harmony.UnpatchSelf);
+    }
+
+    private static void RunCleanup(string operation, Action cleanup)
+    {
+        try
+        {
+            cleanup();
+        }
+        catch (Exception exception)
+        {
+            ModLogger.LogError($"Failed to clean up {operation}: {exception.Message}");
+        }
     }
 
     private void SetupWatcher()
@@ -71,17 +94,46 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         _watcher.EnableRaisingEvents = true;
     }
 
-    private void ReadConfigValues(object sender, FileSystemEventArgs e)
+    private void DisposeWatcher()
     {
-        DateTime now = DateTime.Now;
-        long time = now.Ticks - _lastConfigReloadTime.Ticks;
-        if (time < RELOAD_DELAY)
+        FileSystemWatcher? watcher = _watcher;
+        _watcher = null;
+        if (watcher == null)
         {
             return;
         }
 
+        watcher.EnableRaisingEvents = false;
+        watcher.Changed -= ReadConfigValues;
+        watcher.Created -= ReadConfigValues;
+        watcher.Renamed -= ReadConfigValues;
+        watcher.Dispose();
         lock (_reloadLock)
         {
+            _hasPendingConfigReload = false;
+            _configReloadDueUtc = default;
+        }
+    }
+
+    private void ReadConfigValues(object sender, FileSystemEventArgs e)
+    {
+        lock (_reloadLock)
+        {
+            _hasPendingConfigReload = true;
+            _configReloadDueUtc = DateTime.UtcNow + ConfigReloadDelay;
+        }
+    }
+
+    private void TryReloadConfigValues()
+    {
+        lock (_reloadLock)
+        {
+            if (!_hasPendingConfigReload || DateTime.UtcNow < _configReloadDueUtc)
+            {
+                return;
+            }
+
+            _hasPendingConfigReload = false;
             if (!File.Exists(ConfigFileFullPath))
             {
                 ModLogger.LogWarning("Config file does not exist. Skipping reload.");
@@ -106,8 +158,6 @@ public class CaptainValheimPlugin : BaseUnityPlugin
                 ModLogger.LogError($"Error reloading configuration: {ex.Message}");
             }
         }
-
-        _lastConfigReloadTime = now;
     }
 
     private static string? ReadFileTextIfExists(string path)
@@ -119,10 +169,16 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     {
         bool originalSaveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
-        if (reload)
-            Config.Reload();
-        Config.Save();
-        if (originalSaveOnSet)
+        try
+        {
+            if (reload)
+            {
+                Config.Reload();
+            }
+
+            Config.Save();
+        }
+        finally
         {
             Config.SaveOnConfigSet = originalSaveOnSet;
         }

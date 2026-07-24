@@ -29,4 +29,11 @@ internal static class ProjectileAccess
     {
         return VelocityField?.GetValue(projectile) is UnityEngine.Vector3 velocity ? velocity : UnityEngine.Vector3.zero;
     }
+
+    internal static Character? GetHitCharacter(UnityEngine.Collider collider)
+    {
+        return collider != null
+            ? Projectile.FindHitObject(collider)?.GetComponent<Character>()
+            : null;
+    }
 }

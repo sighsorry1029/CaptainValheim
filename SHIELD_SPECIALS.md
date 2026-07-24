@@ -5,12 +5,15 @@ This document describes the current shield-only behavior in `CaptainValheim`.
 Relevant files:
 
 - `ShieldRuntimeSystem.cs`
+- `ShieldRuntimeSystem.Throw.cs`
+- `ShieldRuntimeSystem.Charge.cs`
 - `SecondaryAttackConfig.Raw.cs`
-- `SecondaryAttackConfig.Normalized.cs`
+- `SecondaryAttackNormalizedShieldModels.cs`
+- `SecondaryAttackConfigLoader.cs`
 
 ## Schema
 
-Shield-prefab entries now live in `CaptainValheim.Shields.yml` and use a flat schema.
+Shield-prefab entries live in `CaptainValheim.yml` and use a flat schema.
 
 Every unlisted shield prefab receives the reserved `Global` entry, or built-in shield defaults when `Global` is omitted.
 Listed shield prefabs inherit `Global` and only override the fields written under that prefab.
@@ -20,16 +23,16 @@ The old shield `bash:` block is no longer supported; use `primaryAttack:` instea
 Global:
   primaryAttack:
     enabled: true
-    damageFactor: 0.5
-    pushFactor: 0.5
+    damageFactor: 0.4
+    pushFactor: 0.4
     durabilityFactor: 1.0
-    staminaFactor: 0.35
+    staminaFactor: 0.8
   throw:
     enabled: true
     animation: battleaxe_attack1
     damageFactor: 0.8
     pushFactor: 1.0
-    durabilityFactor: 2.0
+    durabilityFactor: 1.0
     staminaFactor: 2.0
     ttlFactor: 1.0
     targets: 3
@@ -39,10 +42,10 @@ Global:
     enabled: true
     cooldown: 10.0
     cooldownReductionFactor: 0.5
-    damageFactor: 1.0
+    damageFactor: 1.2
     pushFactor: 2.0
-    durabilityFactor: 1.0
-    staminaFactor: 2.0
+    durabilityFactor: 2.0
+    staminaFactor: 3.0
     distance: 4.0
     speed: 12.0
     hitRadiusFactor: 0.4
@@ -66,13 +69,15 @@ ShieldWoodTower:
 
 ## Activation Rules
 
-Shield specials only apply when:
+Configured shield features apply when:
 
 - the player is holding a shield in the left hand
-- the right hand weapon is empty
-- the shield prefab either has a shield entry in `CaptainValheim.Shields.yml` or is picking up `Global`/built-in shield defaults
+- the shield prefab either has a shield entry in `CaptainValheim.yml` or is picking up `Global`/built-in shield defaults
 - omitted `primaryAttack`, `throw`, or `charge` blocks keep the inherited `Global`/built-in values
 - `enabled: false` on a shield feature block disables that feature after inheritance
+- `primaryAttack`, `throw`, and `charge` require an empty right hand
+- `charge` also requires a positive `distance`; zero or negative distance leaves the charge unavailable
+- `reflect` and `blockCharge` can also work while a right-hand weapon is equipped
 - Shield throw has no cooldown, status effect, or cooldown HUD entry; it is limited by stamina, durability, projectile travel, and shield return/re-equip time.
 - `throw.targets` is the maximum number of valid enemy targets hit, including the first enemy hit. Terrain and wall bounces do not spend targets.
 - `throw.damageDecay` reduces damage after each enemy target hit as `nextDamage *= (1 - damageDecay)`.
@@ -89,7 +94,8 @@ Shield specials only apply when:
 
 - Input: secondary attack
 - Used when the player is not currently blocking
-- Unequips and removes the shield from the inventory, throws it, chains to nearby targets when ricochet cooldown is ready, then drops it back into the world
+- Unequips and removes the shield from the inventory, throws it, chains to nearby targets, then returns it to the inventory and re-equips it
+- Drops the shield back into the world when it cannot be returned to the inventory, including when the inventory is full
 
 ### Charge
 
@@ -106,7 +112,6 @@ Shield specials only apply when:
 ### Block Charge
 
 - Enables Valheim's vanilla block-charge counterattack by setting the shield prefab's `m_buildBlockCharges`
-- `Enable Shield Block Charge = Off` ignores `blockCharge` entries and keeps the prefab's original block-charge values
 - Optional `chargeCount`, `decayTime`, and `blockingDecayFactor` override the prefab's vanilla values
 - Omitting those fields keeps the original prefab values, such as ordinary shields/bucklers `3 / 1.0 / 0.25` and tower shields `5 / 4.0 / 0.5`
 

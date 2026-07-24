@@ -5,18 +5,21 @@ namespace CaptainValheim;
 
 internal sealed class SecondaryAttackCompiledSnapshot
 {
-    public static readonly SecondaryAttackCompiledSnapshot Empty = new(new NormalizedSecondaryAttackConfigFile());
+    public static readonly SecondaryAttackCompiledSnapshot Empty = new(
+        new Dictionary<string, NormalizedShieldModeConfig>(StringComparer.OrdinalIgnoreCase),
+        globalShieldFallback: null);
 
-    public SecondaryAttackCompiledSnapshot(NormalizedSecondaryAttackConfigFile config)
+    public SecondaryAttackCompiledSnapshot(
+        IReadOnlyDictionary<string, NormalizedShieldModeConfig> shields,
+        NormalizedShieldModeConfig? globalShieldFallback)
     {
-        Config = config ?? throw new ArgumentNullException(nameof(config));
+        Shields = shields ?? throw new ArgumentNullException(nameof(shields));
+        GlobalShieldFallback = globalShieldFallback;
     }
 
-    public NormalizedSecondaryAttackConfigFile Config { get; }
+    public IReadOnlyDictionary<string, NormalizedShieldModeConfig> Shields { get; }
 
-    public IReadOnlyDictionary<string, NormalizedWeaponConfig> Weapons => Config.Weapons;
-
-    public NormalizedWeaponConfig? GlobalShieldFallback => Config.GlobalShieldFallback;
+    public NormalizedShieldModeConfig? GlobalShieldFallback { get; }
 }
 
 internal sealed class SecondaryAttackAppliedWorldSnapshot

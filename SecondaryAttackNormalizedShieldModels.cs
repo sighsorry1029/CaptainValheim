@@ -17,13 +17,11 @@ internal sealed class NormalizedShieldPrimaryAttackConfig
 {
     public float DamageFactor { get; set; } = 0.4f;
 
-    public float PushFactor { get; set; } = 1f;
+    public float PushFactor { get; set; } = 0.4f;
 
     public float StaminaFactor { get; set; } = 0.8f;
 
     public float DurabilityFactor { get; set; } = 1f;
-
-    public float AdrenalineFactor { get; set; } = ShieldAdrenalineFactors.PrimaryAttack;
 }
 
 internal sealed class NormalizedShieldThrowConfig
@@ -45,8 +43,6 @@ internal sealed class NormalizedShieldThrowConfig
     public float RadiusFactor { get; set; } = 6f;
 
     public float TtlFactor { get; set; } = 1f;
-
-    public float AdrenalineFactor { get; set; } = ShieldAdrenalineFactors.Throw;
 }
 
 internal sealed class NormalizedShieldChargeConfig
@@ -68,17 +64,6 @@ internal sealed class NormalizedShieldChargeConfig
     public float DurabilityFactor { get; set; } = 2f;
 
     public float HitRadiusFactor { get; set; } = 0.4f;
-
-    public float AdrenalineFactor { get; set; } = ShieldAdrenalineFactors.Charge;
-}
-
-internal static class ShieldAdrenalineFactors
-{
-    public const float PrimaryAttack = 1f;
-
-    public const float Throw = 1f;
-
-    public const float Charge = 5f;
 }
 
 internal sealed class NormalizedShieldReflectConfig

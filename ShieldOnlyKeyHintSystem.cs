@@ -7,7 +7,6 @@ namespace CaptainValheim;
 
 internal static class ShieldOnlyKeyHintSystem
 {
-    private static KeyHints? _activeKeyHints;
     private static readonly List<KeyHintCell> HintCells = [];
     private static readonly List<ShieldHintRow> ReusableRows = [];
     private static ShieldHintState _lastHintState = ShieldHintState.Hidden;
@@ -16,22 +15,20 @@ internal static class ShieldOnlyKeyHintSystem
 
     internal static void InitializeKeyHints(KeyHints hints)
     {
-        _activeKeyHints = hints;
         DestroyHints();
         _hasLastHintState = false;
         _lastHintState = ShieldHintState.Hidden;
         _showingHints = false;
-        UpdateKeyHint(hints, force: true);
+        UpdateKeyHint(hints);
     }
 
-    internal static void UpdateKeyHint(KeyHints hints, bool force = false)
+    internal static void UpdateKeyHint(KeyHints hints)
     {
         if (hints == null)
         {
             return;
         }
 
-        _activeKeyHints = hints;
         Player? player = Player.m_localPlayer;
         if (!ShouldShowCustomCombatHints(hints, player))
         {
@@ -51,7 +48,7 @@ internal static class ShieldOnlyKeyHintSystem
             return;
         }
 
-        if (!force && _showingHints && _hasLastHintState && _lastHintState.Equals(state))
+        if (_showingHints && _hasLastHintState && _lastHintState.Equals(state))
         {
             PrepareCombatHintGroup(hints);
             return;
@@ -76,9 +73,9 @@ internal static class ShieldOnlyKeyHintSystem
 
             ShieldHintRow row = ReusableRows[index];
             cell.Set(row.Label, row.Keys, hideExtraTexts: row.Keys.Count <= 1);
-            cell.RebuildParentLayout();
         }
 
+        HintCells[0].RebuildParentLayout();
         RememberHintState(state);
         _showingHints = true;
     }
@@ -90,18 +87,21 @@ internal static class ShieldOnlyKeyHintSystem
         ItemDrop.ItemData? rightItem = player.GetRightItem();
         if (rightItem != null ||
             leftItem?.m_shared?.m_itemType != ItemDrop.ItemData.ItemType.Shield ||
-            !SecondaryAttackRuntimeFacade.TryGetDefinition(leftItem, out SecondaryAttackDefinition definition) ||
+            !ShieldRuntimeSystem.TryGetDefinition(leftItem, out SecondaryAttackDefinition definition) ||
             definition.ShieldSpecial is not { } shieldBehavior)
         {
             return false;
         }
 
         state = new ShieldHintState(
-            leftItem.m_dropPrefab != null ? leftItem.m_dropPrefab.name : leftItem.m_shared.m_name,
+            Localization.instance?.GetSelectedLanguage() ?? "",
             ZInput.IsGamepadActive(),
             shieldBehavior.HasShieldCharge && shieldBehavior.ShieldChargeDistance > 0f,
             shieldBehavior.HasShieldPrimaryAttack,
-            shieldBehavior.HasShieldThrow);
+            shieldBehavior.HasShieldThrow,
+            ResolveButtonLabel("Attack"),
+            ResolveButtonLabel("Block"),
+            ResolveButtonLabel("SecondaryAttack"));
         return state.HasRows;
     }
 
@@ -110,17 +110,23 @@ internal static class ShieldOnlyKeyHintSystem
         rows.Clear();
         if (state.HasCharge)
         {
-            rows.Add(new ShieldHintRow("Charge", [ResolveButtonLabel("Block"), ResolveButtonLabel("SecondaryAttack")]));
+            rows.Add(new ShieldHintRow(
+                CaptainValheimLocalization.Text("captainvalheim_hint_charge"),
+                [state.BlockKey, state.SecondaryAttackKey]));
         }
 
         if (state.HasPrimaryAttack)
         {
-            rows.Add(new ShieldHintRow("Attack", [ResolveButtonLabel("Attack")]));
+            rows.Add(new ShieldHintRow(
+                CaptainValheimLocalization.Text("captainvalheim_hint_attack"),
+                [state.AttackKey]));
         }
 
         if (state.HasThrow)
         {
-            rows.Add(new ShieldHintRow("Throw", [ResolveButtonLabel("SecondaryAttack")]));
+            rows.Add(new ShieldHintRow(
+                CaptainValheimLocalization.Text("captainvalheim_hint_throw"),
+                [state.SecondaryAttackKey]));
         }
     }
 
@@ -129,13 +135,14 @@ internal static class ShieldOnlyKeyHintSystem
         return player != null &&
                !player.IsDead() &&
                hints.m_keyHintsEnabled &&
+               !player.InPlaceMode() &&
                !Hud.IsPieceSelectionVisible() &&
                !Hud.InRadial() &&
                !InventoryGui.IsVisible() &&
                !Menu.IsVisible() &&
                !Console.IsVisible() &&
                !Game.IsPaused() &&
-               (Chat.instance == null || !Chat.instance.HasFocus()) &&
+               (Chat.instance == null || !Chat.instance.IsChatDialogWindowVisible()) &&
                (InventoryGui.instance == null ||
                  (!InventoryGui.instance.IsSkillsPanelOpen &&
                   !InventoryGui.instance.IsTrophisPanelOpen &&
@@ -287,9 +294,22 @@ internal static class ShieldOnlyKeyHintSystem
         foreach (KeyHintCell cell in HintCells)
         {
             cell.SetActive(false);
-            cell.RebuildParentLayout();
         }
 
+        if (HintCells.Count > 0)
+        {
+            HintCells[0].RebuildParentLayout();
+        }
+
+        _showingHints = false;
+    }
+
+    internal static void Dispose()
+    {
+        DestroyHints();
+        ReusableRows.Clear();
+        _lastHintState = ShieldHintState.Hidden;
+        _hasLastHintState = false;
         _showingHints = false;
     }
 
@@ -299,6 +319,8 @@ internal static class ShieldOnlyKeyHintSystem
         {
             if (cell.Root != null)
             {
+                cell.Root.SetActive(false);
+                cell.Root.transform.SetParent(null, false);
                 Object.Destroy(cell.Root);
             }
         }
@@ -313,19 +335,26 @@ internal static class ShieldOnlyKeyHintSystem
     }
 
     private readonly struct ShieldHintState(
-        string weaponPrefabName,
+        string language,
         bool gamepad,
         bool hasCharge,
         bool hasPrimaryAttack,
-        bool hasThrow)
+        bool hasThrow,
+        string attackKey,
+        string blockKey,
+        string secondaryAttackKey)
     {
-        internal static readonly ShieldHintState Hidden = new("", false, false, false, false);
+        internal static readonly ShieldHintState Hidden =
+            new("", false, false, false, false, "", "", "");
 
-        private readonly string _weaponPrefabName = weaponPrefabName;
+        private readonly string _language = language;
         private readonly bool _gamepad = gamepad;
         internal readonly bool HasCharge = hasCharge;
         internal readonly bool HasPrimaryAttack = hasPrimaryAttack;
         internal readonly bool HasThrow = hasThrow;
+        internal readonly string AttackKey = attackKey;
+        internal readonly string BlockKey = blockKey;
+        internal readonly string SecondaryAttackKey = secondaryAttackKey;
 
         internal bool HasRows => HasCharge || HasPrimaryAttack || HasThrow;
 
@@ -335,7 +364,10 @@ internal static class ShieldOnlyKeyHintSystem
                    HasCharge == other.HasCharge &&
                    HasPrimaryAttack == other.HasPrimaryAttack &&
                    HasThrow == other.HasThrow &&
-                   string.Equals(_weaponPrefabName, other._weaponPrefabName, System.StringComparison.Ordinal);
+                   string.Equals(AttackKey, other.AttackKey, System.StringComparison.Ordinal) &&
+                   string.Equals(BlockKey, other.BlockKey, System.StringComparison.Ordinal) &&
+                   string.Equals(SecondaryAttackKey, other.SecondaryAttackKey, System.StringComparison.Ordinal) &&
+                   string.Equals(_language, other._language, System.StringComparison.Ordinal);
         }
     }
 

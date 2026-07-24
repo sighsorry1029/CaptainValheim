@@ -13,9 +13,6 @@ internal static class ShieldWarfareHitContext
     [System.ThreadStatic]
     private static string? _weaponPrefabName;
 
-    [System.ThreadStatic]
-    private static int _depth;
-
     internal static Scope Begin(Attack attack)
     {
         if (attack?.m_character != Player.m_localPlayer ||
@@ -30,15 +27,14 @@ internal static class ShieldWarfareHitContext
             return default;
         }
 
-        Scope scope = new(_weaponPrefabName, _depth, active: true);
+        Scope scope = new(_weaponPrefabName, active: true);
         _weaponPrefabName = prefabName;
-        _depth++;
         return scope;
     }
 
     internal static bool TryGetWeaponPrefabName(out string weaponPrefabName)
     {
-        weaponPrefabName = _depth > 0 ? _weaponPrefabName ?? "" : "";
+        weaponPrefabName = _weaponPrefabName ?? "";
         return !string.IsNullOrWhiteSpace(weaponPrefabName);
     }
 
@@ -50,21 +46,17 @@ internal static class ShieldWarfareHitContext
         }
 
         _weaponPrefabName = scope.PreviousWeaponPrefabName;
-        _depth = scope.PreviousDepth;
     }
 
     internal readonly struct Scope : System.IDisposable
     {
-        internal Scope(string? previousWeaponPrefabName, int previousDepth, bool active)
+        internal Scope(string? previousWeaponPrefabName, bool active)
         {
             PreviousWeaponPrefabName = previousWeaponPrefabName;
-            PreviousDepth = previousDepth;
             Active = active;
         }
 
         internal string? PreviousWeaponPrefabName { get; }
-
-        internal int PreviousDepth { get; }
 
         internal bool Active { get; }
 

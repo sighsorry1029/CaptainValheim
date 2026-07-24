@@ -4,51 +4,6 @@ using UnityEngine;
 
 namespace CaptainValheim;
 
-internal sealed class CaptainValheimCharacterRpc : MonoBehaviour
-{
-    private const string ShieldReflectDamageRpcName = "CaptainValheim_DeliverShieldReflectDamageV2";
-
-    private Character _character = null!;
-    private ZNetView? _nview;
-
-    private void Awake()
-    {
-        _character = GetComponent<Character>();
-        _nview = GetComponent<ZNetView>();
-        if (_nview == null || !_nview.IsValid())
-        {
-            return;
-        }
-
-        _nview.Register<ZPackage>(ShieldReflectDamageRpcName, RPC_ShieldReflectDamage);
-        if (_character is Player player)
-        {
-            SecondaryAttackManager.AdvertiseShieldReflectProtocol(player, _nview);
-        }
-    }
-
-    private void Start()
-    {
-        if (_character is Player player)
-        {
-            SecondaryAttackManager.AdvertiseShieldReflectProtocol(player, _nview);
-        }
-    }
-
-    internal static void SendShieldReflectDamage(ZNetView targetNView, ZPackage package)
-    {
-        targetNView.InvokeRPC(ShieldReflectDamageRpcName, package);
-    }
-
-    private void RPC_ShieldReflectDamage(long sender, ZPackage package)
-    {
-        if (_character is Player player)
-        {
-            SecondaryAttackManager.ReceiveRemoteShieldReflectDamage(player, _nview, sender, package);
-        }
-    }
-}
-
 [HarmonyPatch(typeof(Projectile), "UpdateVisual")]
 internal static class ProjectileUpdateVisualPatch
 {
@@ -74,25 +29,44 @@ internal static class ProjectileOnHitPatch
         Vector3 hitPoint,
         bool water,
         Vector3 normal,
-        out SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
+        out bool __state)
     {
-        return SecondaryAttackHarmonyDispatch.ProjectileOnHitPrefix(__instance, collider, hitPoint, water, normal, out __state);
+        __state = false;
+        if (ShieldRuntimeSystem.ShouldHandleShieldProjectileHit(__instance, collider, hitPoint, water, normal))
+        {
+            return false;
+        }
+
+        __state = SecondaryAttackRuntimeContext.BeginProjectileHitContext(
+            __instance,
+            collider,
+            hitPoint,
+            water,
+            normal);
+        return true;
     }
 
     [HarmonyPriority(Priority.First)]
     [HarmonyAfter("sighsorry.SecondaryAttacks")]
-    private static void Postfix(ref SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
+    private static void Postfix(ref bool __state)
     {
-        SecondaryAttackHarmonyDispatch.EndProjectileOnHit(ref __state);
+        EndProjectileHitContext(ref __state);
     }
 
     [HarmonyAfter("sighsorry.SecondaryAttacks")]
     private static Exception? Finalizer(
         Exception? __exception,
-        ref SecondaryAttackHarmonyDispatch.ProjectileOnHitState __state)
+        ref bool __state)
     {
-        SecondaryAttackHarmonyDispatch.EndProjectileOnHit(ref __state);
+        EndProjectileHitContext(ref __state);
         return __exception;
+    }
+
+    private static void EndProjectileHitContext(ref bool active)
+    {
+        bool wasActive = active;
+        active = false;
+        SecondaryAttackRuntimeContext.EndProjectileHitContext(wasActive);
     }
 }
 
@@ -170,7 +144,10 @@ internal static class PlayerUpdatePendingConfigPatch
 {
     private static void Postfix(Player __instance)
     {
-        SecondaryAttackHarmonyDispatch.PlayerUpdatePostfix(__instance);
+        if (__instance == Player.m_localPlayer)
+        {
+            ShieldRuntimeSystem.UpdateReturnedShieldAutoEquip(__instance);
+        }
     }
 }
 
@@ -188,7 +165,7 @@ internal static class ObjectDbCopyOtherDbPatch
 {
     private static void Postfix(ObjectDB __instance)
     {
-        SecondaryAttackFacade.ApplyPendingConfigToObjectDb(__instance, emitMissingWarnings: false);
+        SecondaryAttackFacade.ApplyPendingConfigToObjectDb(__instance, emitMissingWarnings: true);
     }
 }
 
@@ -290,7 +267,7 @@ internal static class HumanoidStartAttackPatch
         ItemDrop.ItemData ___m_leftItem,
         ItemDrop.ItemData ___m_rightItem)
     {
-        return SecondaryAttackStartAttackDispatch.Prefix(
+        return ShieldRuntimeSystem.HandleStartAttackPrefix(
             __instance,
             secondaryAttack,
             ref __result,
@@ -300,12 +277,12 @@ internal static class HumanoidStartAttackPatch
 
     private static void Postfix(Humanoid __instance, bool __result)
     {
-        SecondaryAttackStartAttackDispatch.Postfix(__instance, __result);
+        ShieldRuntimeSystem.EndShieldAttackStart(__instance, __result);
     }
 
     private static Exception? Finalizer(Exception? __exception, Humanoid __instance)
     {
-        SecondaryAttackStartAttackDispatch.Finalize(__instance);
+        ShieldRuntimeSystem.EndShieldAttackStart(__instance, startedAttack: false);
         return __exception;
     }
 }
@@ -318,7 +295,7 @@ internal static class AttackOnAttackTriggerPatch
         Attack __instance,
         out ShieldRuntimeSystem.ShieldPrimaryTriggerState __state)
     {
-        return !SecondaryAttackRuntimeFacade.TryHandleCustomAttackTrigger(__instance, out __state);
+        return !ShieldRuntimeSystem.TryHandleCustomAttackTrigger(__instance, out __state);
     }
 
     private static void Postfix(ref ShieldRuntimeSystem.ShieldPrimaryTriggerState __state)

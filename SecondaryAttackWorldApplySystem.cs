@@ -22,6 +22,11 @@ internal static class SecondaryAttackWorldApplySystem
         ShieldRuntimeSystem.ResetTransientState();
         Dictionary<string, SecondaryAttackDefinition> appliedDefinitions = new(StringComparer.OrdinalIgnoreCase);
         HashSet<string> seenConfiguredPrefabs = new(StringComparer.OrdinalIgnoreCase);
+        List<(
+            ItemDrop.ItemData.SharedData SharedData,
+            SecondaryAttackDefinition Definition,
+            Attack? SecondaryAttack,
+            EffectList? BlockChargeEffects)> mutationPlan = new();
         int appliedCount = 0;
         int appliedGlobalShieldFallbackCount = 0;
 
@@ -39,30 +44,28 @@ internal static class SecondaryAttackWorldApplySystem
             }
 
             bool usesGlobalShieldFallback = false;
-            if (!compiledSnapshot.Weapons.TryGetValue(itemPrefab.name, out NormalizedWeaponConfig? weaponConfig))
+            if (!compiledSnapshot.Shields.TryGetValue(
+                    itemPrefab.name,
+                    out NormalizedShieldModeConfig? shieldConfig))
             {
-                if (!ShouldApplyGlobalShieldFallback(itemDrop))
+                if (!ShouldApplyGlobalShieldFallback(itemDrop) ||
+                    compiledSnapshot.GlobalShieldFallback == null)
                 {
                     continue;
                 }
 
-                weaponConfig = compiledSnapshot.GlobalShieldFallback ??
-                               SecondaryAttackWeaponConfigNormalizer.CreateGlobalDefaultShieldFallback();
+                shieldConfig = compiledSnapshot.GlobalShieldFallback;
                 usesGlobalShieldFallback = true;
             }
             else
             {
                 seenConfiguredPrefabs.Add(itemPrefab.name);
-                if (weaponConfig.Shield == null)
-                {
-                    continue;
-                }
             }
 
             if (!SecondaryAttackDefinitionCompiler.TryCreateDefinition(
                     itemPrefab.name,
                     itemDrop,
-                    weaponConfig,
+                    shieldConfig,
                     emitMissingWarnings,
                     out SecondaryAttackDefinition? definition))
             {
@@ -71,15 +74,31 @@ internal static class SecondaryAttackWorldApplySystem
 
             SecondaryAttackDefinition resolvedDefinition = definition!;
             appliedDefinitions[itemPrefab.name] = resolvedDefinition;
-            ApplyShieldBlockCharge(objectDb, itemDrop, resolvedDefinition);
-
+            Attack? configuredSecondaryAttack = null;
             if (resolvedDefinition.AppliesSecondaryOverride)
             {
                 Attack sourceAttack = SecondaryAttackManager.ResolveSourceAttack(itemDrop);
-                Attack configuredSecondaryAttack = SecondaryAttackManager.BuildSecondaryAttack(sourceAttack);
-                itemDrop.m_itemData.m_shared.m_secondaryAttack = configuredSecondaryAttack;
+                configuredSecondaryAttack = SecondaryAttackManager.BuildSecondaryAttack(sourceAttack);
             }
 
+            EffectList? blockChargeEffects = null;
+            ItemDrop.ItemData.SharedData sharedData = itemDrop.m_itemData.m_shared;
+            if (resolvedDefinition.ShieldBlockCharge && !HasEffect(sharedData.m_blockChargeEffects))
+            {
+                int maxBlockCharges = resolvedDefinition.ShieldBlockChargeCount.HasValue
+                    ? Mathf.Max(1, resolvedDefinition.ShieldBlockChargeCount.Value)
+                    : sharedData.m_maxBlockCharges;
+                if (TryBuildBlockChargeEffects(objectDb, maxBlockCharges, out EffectList plannedEffects))
+                {
+                    blockChargeEffects = plannedEffects;
+                }
+            }
+
+            mutationPlan.Add((
+                sharedData,
+                resolvedDefinition,
+                configuredSecondaryAttack,
+                blockChargeEffects));
             appliedCount++;
             if (usesGlobalShieldFallback)
             {
@@ -89,7 +108,7 @@ internal static class SecondaryAttackWorldApplySystem
 
         SecondaryAttackAppliedWorldSnapshot appliedWorldSnapshot = new(appliedDefinitions);
 
-        foreach (string configuredPrefabName in compiledSnapshot.Weapons.Keys.Where(key => !seenConfiguredPrefabs.Contains(key)))
+        foreach (string configuredPrefabName in compiledSnapshot.Shields.Keys.Where(key => !seenConfiguredPrefabs.Contains(key)))
         {
             if (!emitMissingWarnings)
             {
@@ -103,7 +122,48 @@ internal static class SecondaryAttackWorldApplySystem
             }
         }
 
-        ShieldChargeCooldownStatusSystem.RegisterStatusEffect(objectDb);
+        try
+        {
+            foreach ((
+                         ItemDrop.ItemData.SharedData sharedData,
+                         SecondaryAttackDefinition definition,
+                         Attack? secondaryAttack,
+                         EffectList? blockChargeEffects) in mutationPlan)
+            {
+                ApplyShieldBlockCharge(
+                    objectDb,
+                    sharedData,
+                    definition,
+                    blockChargeEffects);
+                if (secondaryAttack != null)
+                {
+                    SecondaryAttackObjectDbStateStore.SetSecondaryAttack(
+                        sharedData,
+                        secondaryAttack);
+                }
+            }
+
+            if (mutationPlan.Any(plan =>
+                    plan.Definition.ShieldSpecial is
+                    {
+                        HasShieldCharge: true,
+                        ShieldChargeDistance: > 0f
+                    }))
+            {
+                ShieldChargeCooldownStatusSystem.RegisterStatusEffect(objectDb);
+            }
+            else
+            {
+                ShieldChargeCooldownStatusSystem.UnregisterStatusEffect(objectDb);
+            }
+        }
+        catch
+        {
+            SecondaryAttackObjectDbStateStore.Restore(objectDb);
+            ShieldRuntimeSystem.ResetTransientState();
+            throw;
+        }
+
         CaptainValheimPlugin.ModLogger.LogInfo($"Applied {appliedCount} shield definition(s), including {appliedGlobalShieldFallbackCount} global shield fallback definition(s).");
         return appliedWorldSnapshot;
     }
@@ -113,44 +173,55 @@ internal static class SecondaryAttackWorldApplySystem
         return itemDrop.m_itemData?.m_shared?.m_itemType == ItemDrop.ItemData.ItemType.Shield;
     }
 
-    private static void ApplyShieldBlockCharge(ObjectDB objectDb, ItemDrop itemDrop, SecondaryAttackDefinition definition)
+    private static void ApplyShieldBlockCharge(
+        ObjectDB objectDb,
+        ItemDrop.ItemData.SharedData sharedData,
+        SecondaryAttackDefinition definition,
+        EffectList? plannedBlockChargeEffects)
     {
         if (!definition.ShieldBlockCharge)
         {
             return;
         }
 
-        ItemDrop.ItemData.SharedData? sharedData = itemDrop.m_itemData?.m_shared;
-        if (sharedData == null || sharedData.m_itemType != ItemDrop.ItemData.ItemType.Shield)
+        if (sharedData.m_itemType != ItemDrop.ItemData.ItemType.Shield)
         {
             return;
         }
 
-        sharedData.m_buildBlockCharges = true;
+        SecondaryAttackObjectDbStateStore.SetBuildBlockCharges(sharedData, true);
         if (definition.ShieldBlockChargeCount.HasValue)
         {
-            sharedData.m_maxBlockCharges = Mathf.Max(1, definition.ShieldBlockChargeCount.Value);
+            SecondaryAttackObjectDbStateStore.SetMaxBlockCharges(
+                sharedData,
+                Mathf.Max(1, definition.ShieldBlockChargeCount.Value));
         }
 
         if (definition.ShieldBlockChargeDecayTime.HasValue)
         {
-            sharedData.m_blockChargeDecayTime = Mathf.Max(0f, definition.ShieldBlockChargeDecayTime.Value);
+            SecondaryAttackObjectDbStateStore.SetBlockChargeDecayTime(
+                sharedData,
+                Mathf.Max(0f, definition.ShieldBlockChargeDecayTime.Value));
         }
 
         if (definition.ShieldBlockChargeBlockingDecayFactor.HasValue)
         {
-            sharedData.m_blockChargeBlockingDecayMult = Mathf.Max(0f, definition.ShieldBlockChargeBlockingDecayFactor.Value);
+            SecondaryAttackObjectDbStateStore.SetBlockChargeBlockingDecayFactor(
+                sharedData,
+                Mathf.Max(0f, definition.ShieldBlockChargeBlockingDecayFactor.Value));
         }
 
         if (!HasEffect(sharedData.m_blockChargeEffects) &&
-            TryBuildBlockChargeEffects(objectDb, sharedData.m_maxBlockCharges, out EffectList blockChargeEffects))
+            plannedBlockChargeEffects != null)
         {
-            sharedData.m_blockChargeEffects = blockChargeEffects;
+            SecondaryAttackObjectDbStateStore.SetBlockChargeEffects(
+                sharedData,
+                plannedBlockChargeEffects);
         }
 
         if (sharedData.m_damages.GetTotalDamage() <= 0f)
         {
-            sharedData.m_damages.m_damage = 5f;
+            SecondaryAttackObjectDbStateStore.SetGenericDamage(sharedData, 5f);
         }
     }
 
@@ -168,7 +239,7 @@ internal static class SecondaryAttackWorldApplySystem
                 continue;
             }
 
-            EffectList cloned = CloneEffectList(source!, maxVariant);
+            EffectList cloned = SecondaryAttackObjectDbStateStore.CloneEffectList(source, maxVariant);
             if (HasEffect(cloned))
             {
                 blockChargeEffects = cloned;
@@ -213,33 +284,4 @@ internal static class SecondaryAttackWorldApplySystem
         return effectList != null && effectList.HasEffects();
     }
 
-    private static EffectList CloneEffectList(EffectList source, int maxVariant)
-    {
-        EffectList.EffectData[] sourceEffects = source.m_effectPrefabs ?? [];
-        List<EffectList.EffectData> clonedEffects = new(sourceEffects.Length);
-        foreach (EffectList.EffectData sourceEffect in sourceEffects)
-        {
-            if (sourceEffect.m_variant > maxVariant)
-            {
-                continue;
-            }
-
-            clonedEffects.Add(new EffectList.EffectData
-            {
-                m_prefab = sourceEffect.m_prefab,
-                m_enabled = sourceEffect.m_enabled,
-                m_variant = sourceEffect.m_variant,
-                m_attach = sourceEffect.m_attach,
-                m_follow = sourceEffect.m_follow,
-                m_inheritParentRotation = sourceEffect.m_inheritParentRotation,
-                m_inheritParentScale = sourceEffect.m_inheritParentScale,
-                m_multiplyParentVisualScale = sourceEffect.m_multiplyParentVisualScale,
-                m_randomRotation = sourceEffect.m_randomRotation,
-                m_scale = sourceEffect.m_scale,
-                m_childTransform = sourceEffect.m_childTransform
-            });
-        }
-
-        return new EffectList { m_effectPrefabs = clonedEffects.ToArray() };
-    }
 }

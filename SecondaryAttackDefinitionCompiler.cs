@@ -7,21 +7,21 @@ internal static class SecondaryAttackDefinitionCompiler
     internal static bool TryCreateDefinition(
         string prefabName,
         ItemDrop itemDrop,
-        NormalizedWeaponConfig weaponConfig,
+        NormalizedShieldModeConfig shieldConfig,
         bool emitWarnings,
         out SecondaryAttackDefinition? definition)
     {
         definition = null;
         ItemDrop.ItemData.SharedData? sharedData = itemDrop.m_itemData?.m_shared;
-        NormalizedShieldModeConfig? shieldConfig = weaponConfig.Shield;
-        if (sharedData == null || shieldConfig == null)
+        if (sharedData == null)
         {
             return false;
         }
 
         if (sharedData.m_itemType != ItemDrop.ItemData.ItemType.Shield)
         {
-            if (emitWarnings && SecondaryAttackWarningLog.TryMarkWarning($"non_shield_prefab:{prefabName}"))
+            if (emitWarnings &&
+                SecondaryAttackManager.TryMarkCompatibilityWarningReported($"non_shield_prefab:{prefabName}"))
             {
                 CaptainValheimPlugin.ModLogger.LogWarning(
                     $"Skipping {prefabName}: CaptainValheim shield features can only be used on shield prefabs.");
@@ -32,7 +32,10 @@ internal static class SecondaryAttackDefinitionCompiler
 
         bool hasShieldSpecial = shieldConfig.PrimaryAttack != null ||
                                 shieldConfig.Throw != null ||
-                                shieldConfig.Charge != null;
+                                shieldConfig.Charge is
+                                {
+                                    Distance: > 0f
+                                };
         if (!hasShieldSpecial && shieldConfig.Reflect == null && shieldConfig.BlockCharge == null)
         {
             return false;
@@ -69,7 +72,10 @@ internal static class SecondaryAttackDefinitionCompiler
         NormalizedShieldChargeConfig? chargeConfig = shieldConfig.Charge;
         bool hasPrimaryAttack = primaryAttackConfig != null;
         bool hasThrow = throwConfig != null;
-        bool hasCharge = chargeConfig != null;
+        bool hasCharge = chargeConfig is
+        {
+            Distance: > 0f
+        };
 
         return new ShieldSpecialSecondaryBehavior
         {
@@ -78,7 +84,6 @@ internal static class SecondaryAttackDefinitionCompiler
             ShieldPrimaryAttackPushFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.PushFactor) : 0f,
             ShieldPrimaryAttackStaminaFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.StaminaFactor) : 0f,
             ShieldPrimaryAttackDurabilityFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.DurabilityFactor) : 1f,
-            ShieldPrimaryAttackAdrenalineFactor = hasPrimaryAttack ? Mathf.Max(0f, primaryAttackConfig!.AdrenalineFactor) : 0f,
             HasShieldThrow = hasThrow,
             ShieldThrowAnimation = hasThrow ? throwConfig!.Animation : string.Empty,
             ShieldThrowTargets = hasThrow ? Mathf.Max(0, throwConfig!.Targets) : 0,
@@ -89,7 +94,6 @@ internal static class SecondaryAttackDefinitionCompiler
             ShieldThrowDamageDecay = hasThrow ? Mathf.Clamp01(throwConfig!.DamageDecay) : 0f,
             ShieldThrowRadiusFactor = hasThrow ? Mathf.Max(0f, throwConfig!.RadiusFactor) : 0f,
             ShieldThrowTtlFactor = hasThrow ? Mathf.Max(0f, throwConfig!.TtlFactor) : 0f,
-            ShieldThrowAdrenalineFactor = hasThrow ? Mathf.Max(0f, throwConfig!.AdrenalineFactor) : 0f,
             HasShieldCharge = hasCharge,
             ShieldChargeDamageFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.DamageFactor) : 0f,
             ShieldChargePushFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.PushFactor) : 0f,
@@ -99,8 +103,7 @@ internal static class SecondaryAttackDefinitionCompiler
             ShieldChargeCooldown = hasCharge ? Mathf.Max(0f, chargeConfig!.Cooldown) : 0f,
             ShieldChargeCooldownReductionFactor = hasCharge ? Mathf.Clamp01(chargeConfig!.CooldownReductionFactor) : 0f,
             ShieldChargeDurabilityFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.DurabilityFactor) : 1f,
-            ShieldChargeHitRadiusFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.HitRadiusFactor) : 0f,
-            ShieldChargeAdrenalineFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.AdrenalineFactor) : 0f
+            ShieldChargeHitRadiusFactor = hasCharge ? Mathf.Max(0f, chargeConfig!.HitRadiusFactor) : 0f
         };
     }
 }

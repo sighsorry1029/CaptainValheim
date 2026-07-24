@@ -3,14 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Object = UnityEngine.Object;
-using ProjectileLaunchData = CaptainValheim.ProjectileRuntimeSystem.ProjectileLaunchData;
 
 namespace CaptainValheim;
 
 internal static partial class ShieldRuntimeSystem
 {
-    private const float ShieldChargeStartVfxForwardOffset = 0f;
-    private const float ShieldChargeStartVfxYOffset = 0.5f;
     private static readonly List<Renderer> ShieldProjectileRendererBuffer = new();
 
     private static void StartShieldThrow(Attack attack, SecondaryAttackDefinition definition)
@@ -72,54 +69,6 @@ internal static partial class ShieldRuntimeSystem
         }
 
         DropThrownShield(thrownShield, spawnPoint, Quaternion.LookRotation(aimDirection));
-    }
-
-    private static void StartShieldCharge(Attack attack, SecondaryAttackDefinition definition)
-    {
-        ShieldSpecialSecondaryBehavior? behavior = definition.ShieldSpecial;
-        if (behavior == null || !behavior.HasShieldCharge)
-        {
-            return;
-        }
-
-        float deflectionForce = attack.m_weapon.GetDeflectionForce();
-        float distance = Mathf.Max(0f, behavior.ShieldChargeDistance);
-        float damage = Mathf.Max(0f, GetShieldBlockPower(attack) * behavior.ShieldChargeDamageFactor);
-        float pushForce = Mathf.Max(0f, deflectionForce * behavior.ShieldChargePushFactor);
-        float hitRadius = CalculateShieldChargeHitRadius(deflectionForce, behavior.ShieldChargeHitRadiusFactor);
-        float cooldown = CalculateShieldChargeCooldown(attack.m_character, behavior);
-        float staminaCost = attack.GetAttackStamina();
-        if (staminaCost > 0f)
-        {
-            if (!attack.m_character.HaveStamina(staminaCost))
-            {
-                attack.Stop();
-                return;
-            }
-
-            attack.m_character.UseStamina(staminaCost);
-            attack.m_attackStamina = 0f;
-        }
-
-        PlayShieldThrowChargeStartSfx(attack);
-        PlayShieldChargeStartVfx(attack);
-        GameObject controllerObject = new("CaptainValheim_ShieldCharge");
-        ShieldChargeController controller = controllerObject.AddComponent<ShieldChargeController>();
-        controller.Initialize(
-            attack,
-            distance,
-            damage,
-            pushForce,
-            hitRadius,
-            behavior.ShieldChargeSpeed,
-            cooldown,
-            1f,
-            0f);
-    }
-
-    private static float GetShieldBlockPower(Attack attack)
-    {
-        return attack.m_weapon.GetBlockPower(attack.m_character.GetSkillFactor(Skills.SkillType.Blocking));
     }
 
     private static Vector3 ResolveShieldThrowAimDirection(Attack attack, Vector3 spawnPoint, Vector3 fallbackAimDirection, float maxTravelDistance)
@@ -214,7 +163,7 @@ internal static partial class ShieldRuntimeSystem
                 continue;
             }
 
-            Character? hitCharacter = SecondaryAttackManager.GetHitCharacter(hit.collider);
+            Character? hitCharacter = ProjectileAccess.GetHitCharacter(hit.collider);
             Vector3 targetPoint = hitCharacter != null && hitCharacter != player
                 ? hitCharacter.GetCenterPoint()
                 : hit.point;
@@ -265,27 +214,12 @@ internal static partial class ShieldRuntimeSystem
             : 0f;
     }
 
-    private static float CalculateShieldChargeHitRadius(float deflectionForce, float hitRadiusFactor)
-    {
-        return Mathf.Sqrt(Mathf.Max(0f, deflectionForce) / ShieldChargeHitRadiusReferenceForce) * Mathf.Max(0f, hitRadiusFactor);
-    }
-
-    private static float CalculateShieldChargeCooldown(Character character, ShieldSpecialSecondaryBehavior behavior)
-    {
-        float baseCooldown = Mathf.Max(0f, behavior.ShieldChargeCooldown);
-        if (baseCooldown <= 0f)
-        {
-            return 0f;
-        }
-
-        float blockingLevel = character != null ? Mathf.Clamp(character.GetSkillLevel(Skills.SkillType.Blocking), 0f, 100f) : 0f;
-        float reduction = Mathf.Clamp01(blockingLevel / 100f) * Mathf.Clamp01(behavior.ShieldChargeCooldownReductionFactor);
-        return Mathf.Max(0f, baseCooldown * (1f - reduction));
-    }
-
     private static float CalculateShieldThrowProjectileSpeed(ProjectileLaunchData launchData)
     {
-        return Mathf.Max(18f, SecondaryAttackManager.ResolveProjectileSpeed(launchData));
+        float speed = launchData.UseRandomVelocity
+            ? UnityEngine.Random.Range(launchData.ProjectileVelocityMin, launchData.ProjectileVelocity)
+            : launchData.ProjectileVelocity;
+        return Mathf.Max(18f, speed);
     }
 
     internal static bool TryCalculateShieldSpecialRawStaminaCost(
@@ -346,388 +280,6 @@ internal static partial class ShieldRuntimeSystem
         }
     }
 
-    private static bool TryApplyShieldHit(
-        Attack attack,
-        Character target,
-        Vector3 direction,
-        Vector3 hitPoint,
-        float damage,
-        float pushForce,
-        float hitRadius,
-        HashSet<Character> hitTargets,
-        ref bool skillRaised)
-    {
-        if (target == null || target.IsDead() || hitTargets.Contains(target) || !CanShieldAttackHitCharacter(attack, target))
-        {
-            return false;
-        }
-
-        hitTargets.Add(target);
-        HitData hitData = CreateShieldHitData(attack, direction, hitPoint, damage, pushForce);
-        hitData.m_hitCollider = FindBestHitCollider(target, hitPoint, hitRadius);
-        using (ShieldWarfareHitContext.Begin(attack))
-        {
-            target.Damage(hitData);
-        }
-        if (BaseAI.IsEnemy(attack.m_character, target))
-        {
-            float adrenalineFactor = SecondaryAttackRuntimeContext.TryGetActiveAttack(attack, out ActiveSecondaryAttack? activeAttack) && activeAttack != null
-                ? SecondaryAttackAdrenalineSystem.ResolveFactor(activeAttack)
-                : 1f;
-            SecondaryAttackAdrenalineSystem.TryGrantOnceRaw(attack, target, 1f, adrenalineFactor, "shield");
-        }
-
-        if (!skillRaised)
-        {
-            attack.m_character.RaiseSkill(attack.m_weapon.m_shared.m_skillType, attack.m_raiseSkillAmount);
-            skillRaised = true;
-        }
-
-        return true;
-    }
-
-    private static bool TryApplyShieldChargeImpact(
-        Attack attack,
-        Vector3 impactPoint,
-        Vector3 direction,
-        float damage,
-        float pushForce,
-        float impactRadius,
-        HashSet<Character> hitTargets,
-        ref bool skillRaised,
-        bool applyLowerDamagePerHit = false)
-    {
-        int hitCount = Physics.OverlapSphereNonAlloc(
-            impactPoint,
-            impactRadius,
-            ShieldChargeImpactHits,
-            SecondaryAttackManager.GetShieldChargeImpactMask(),
-            QueryTriggerInteraction.Ignore);
-
-        try
-        {
-            for (int index = 0; index < hitCount; index++)
-            {
-                Collider collider = ShieldChargeImpactHits[index];
-                ShieldChargeImpactHits[index] = null!;
-                if (collider == null)
-                {
-                    continue;
-                }
-
-                IDestructible? destructible = ResolveShieldImpactTarget(collider);
-                if (destructible == null || !ShieldChargeImpactedTargets.Add(destructible))
-                {
-                    continue;
-                }
-
-                if (destructible is not MonoBehaviour)
-                {
-                    continue;
-                }
-
-                ShieldChargeImpactTargets.Add(new ShieldImpactTarget(destructible, collider));
-            }
-
-            bool hitAny = false;
-            int validTargetCount = ShieldChargeImpactTargets.Count;
-            float damageScale = 1f;
-            if (applyLowerDamagePerHit && validTargetCount > 1)
-            {
-                damageScale = 1f / (validTargetCount * 0.75f);
-            }
-
-            foreach (ShieldImpactTarget target in ShieldChargeImpactTargets)
-            {
-                float scaledDamage = damage * damageScale;
-                float scaledPushForce = pushForce * damageScale;
-                if (target.Destructible is Character candidate)
-                {
-                    if (TryApplyShieldHit(attack, candidate, direction, impactPoint, scaledDamage, scaledPushForce, impactRadius, hitTargets, ref skillRaised))
-                    {
-                        hitAny = true;
-                    }
-
-                    continue;
-                }
-
-                HitData hitData = CreateShieldHitData(attack, direction, impactPoint, scaledDamage, scaledPushForce);
-                hitData.m_hitCollider = target.Collider;
-                using (ShieldWarfareHitContext.Begin(attack))
-                {
-                    target.Destructible.Damage(hitData);
-                }
-                hitAny = true;
-            }
-
-            return hitAny;
-        }
-        finally
-        {
-            ShieldChargeImpactedTargets.Clear();
-            ShieldChargeImpactTargets.Clear();
-        }
-    }
-
-    private static bool CanShieldAttackHitCharacter(Attack attack, Character target)
-    {
-        if (attack == null || attack.m_character == null || attack.m_weapon == null || target == null || target == attack.m_character)
-        {
-            return false;
-        }
-
-        Character attacker = attack.m_character;
-        bool isEnemy = BaseAI.IsEnemy(attacker, target) ||
-                       (target.GetBaseAI() is { } targetAi && targetAi.IsAggravatable() && attacker.IsPlayer());
-        if (((!attack.m_hitFriendly || attacker.IsTamed()) && !attacker.IsPlayer() && !isEnemy) ||
-            (!attack.m_weapon.m_shared.m_tamedOnly && attacker.IsPlayer() && !attacker.IsPVPEnabled() && !isEnemy) ||
-            (attack.m_weapon.m_shared.m_tamedOnly && !target.IsTamed()))
-        {
-            return false;
-        }
-
-        if (attack.m_weapon.m_shared.m_dodgeable && target.IsDodgeInvincible())
-        {
-            if (target is Player dodgingPlayer)
-            {
-                dodgingPlayer.HitWhileDodging();
-            }
-
-            return false;
-        }
-
-        return true;
-    }
-
-    private static HitData CreateShieldHitData(Attack attack, Vector3 direction, Vector3 hitPoint, float damage, float pushForce)
-    {
-        HitData hitData = new();
-        hitData.m_toolTier = (short)attack.m_weapon.m_shared.m_toolTier;
-        hitData.m_pushForce = pushForce;
-        hitData.m_backstabBonus = attack.m_weapon.m_shared.m_backstabBonus;
-        hitData.m_staggerMultiplier = 1f;
-        hitData.m_blockable = attack.m_weapon.m_shared.m_blockable;
-        hitData.m_dodgeable = attack.m_weapon.m_shared.m_dodgeable;
-        hitData.m_skill = attack.m_weapon.m_shared.m_skillType;
-        hitData.m_skillRaiseAmount = attack.m_raiseSkillAmount;
-        hitData.m_skillLevel = attack.m_character.GetSkillLevel(attack.m_weapon.m_shared.m_skillType);
-        hitData.m_itemLevel = (short)attack.m_weapon.m_quality;
-        hitData.m_itemWorldLevel = (byte)attack.m_weapon.m_worldLevel;
-        hitData.m_point = hitPoint;
-        hitData.m_dir = direction.sqrMagnitude > 0.001f ? direction.normalized : SecondaryAttackManager.GetSentinelForward(attack.m_character);
-        hitData.m_healthReturn = attack.m_attackHealthReturnHit;
-        hitData.m_damage.m_blunt = damage;
-        hitData.m_statusEffectHash = ResolveAttackStatusEffectHash(attack.m_weapon);
-        hitData.SetAttacker(attack.m_character);
-        hitData.m_hitType = attack.m_character is Player ? HitData.HitType.PlayerHit : HitData.HitType.EnemyHit;
-        attack.m_character.GetSEMan().ModifyAttack(attack.m_weapon.m_shared.m_skillType, ref hitData);
-        return hitData;
-    }
-
-    private static int ResolveAttackStatusEffectHash(ItemDrop.ItemData weapon)
-    {
-        StatusEffect statusEffect = weapon.m_shared.m_attackStatusEffect;
-        if (statusEffect == null)
-        {
-            return 0;
-        }
-
-        return weapon.m_shared.m_attackStatusEffectChance >= 1f || UnityEngine.Random.Range(0f, 1f) < weapon.m_shared.m_attackStatusEffectChance
-            ? statusEffect.NameHash()
-            : 0;
-    }
-
-    private static Collider? FindBestHitCollider(Character target, Vector3 point, float radius)
-    {
-        ShieldChargeTargetColliders.Clear();
-        target.GetComponentsInChildren(includeInactive: false, ShieldChargeTargetColliders);
-        Collider? bestCollider = null;
-        float bestDistance = float.MaxValue;
-        float radiusSquared = radius * radius;
-        foreach (Collider collider in ShieldChargeTargetColliders)
-        {
-            if (collider == null || !collider.enabled)
-            {
-                continue;
-            }
-
-            Vector3 closestPoint = SecondaryAttackManager.ResolveSafeClosestPoint(collider, point);
-            float distanceSquared = (closestPoint - point).sqrMagnitude;
-            if (distanceSquared > radiusSquared || distanceSquared >= bestDistance)
-            {
-                continue;
-            }
-
-            bestDistance = distanceSquared;
-            bestCollider = collider;
-        }
-
-        ShieldChargeTargetColliders.Clear();
-        return bestCollider;
-    }
-
-    private static IDestructible? ResolveShieldImpactTarget(Collider collider)
-    {
-        if (collider == null)
-        {
-            return null;
-        }
-
-        GameObject hitObject = Projectile.FindHitObject(collider);
-        return hitObject != null ? hitObject.GetComponent<IDestructible>() : null;
-    }
-
-    private static bool TryFindShieldChargeImpact(
-        Attack attack,
-        Vector3 start,
-        Vector3 end,
-        float hitRadius,
-        HashSet<Character> hitTargets,
-        out Character? impactTarget,
-        out float impactProgress,
-        out Vector3 impactPoint)
-    {
-        impactTarget = null;
-        impactProgress = 0f;
-        impactPoint = end;
-        float closestProgress = float.MaxValue;
-        float scanRadius = (end - start).magnitude * 0.5f + hitRadius;
-        if (scanRadius <= 0f)
-        {
-            return false;
-        }
-
-        Vector3 scanCenter = (start + end) * 0.5f;
-        int hitCount = Physics.OverlapSphereNonAlloc(
-            scanCenter,
-            scanRadius,
-            ShieldChargeScanHits,
-            SecondaryAttackManager.GetShieldChargeImpactMask(),
-            QueryTriggerInteraction.Ignore);
-
-        if (hitCount >= ShieldChargeScanHits.Length)
-        {
-            ClearShieldChargeScanHits(hitCount);
-            return TryFindShieldChargeImpactByAllCharacters(
-                attack,
-                start,
-                end,
-                hitRadius,
-                hitTargets,
-                ref impactTarget,
-                ref impactProgress,
-                ref impactPoint,
-                ref closestProgress);
-        }
-
-        try
-        {
-            for (int index = 0; index < hitCount; index++)
-            {
-                Collider collider = ShieldChargeScanHits[index];
-                ShieldChargeScanHits[index] = null!;
-                Character? candidate = collider != null ? SecondaryAttackManager.GetHitCharacter(collider) : null;
-                if (candidate == null || !ShieldChargeScanCandidates.Add(candidate))
-                {
-                    continue;
-                }
-
-                TryConsiderShieldChargeImpactCandidate(
-                    attack,
-                    candidate,
-                    start,
-                    end,
-                    hitRadius,
-                    hitTargets,
-                    ref impactTarget,
-                    ref impactProgress,
-                    ref impactPoint,
-                    ref closestProgress);
-            }
-
-            return impactTarget != null;
-        }
-        finally
-        {
-            ShieldChargeScanCandidates.Clear();
-        }
-    }
-
-    private static bool TryFindShieldChargeImpactByAllCharacters(
-        Attack attack,
-        Vector3 start,
-        Vector3 end,
-        float hitRadius,
-        HashSet<Character> hitTargets,
-        ref Character? impactTarget,
-        ref float impactProgress,
-        ref Vector3 impactPoint,
-        ref float closestProgress)
-    {
-        foreach (Character candidate in Character.GetAllCharacters())
-        {
-            TryConsiderShieldChargeImpactCandidate(
-                attack,
-                candidate,
-                start,
-                end,
-                hitRadius,
-                hitTargets,
-                ref impactTarget,
-                ref impactProgress,
-                ref impactPoint,
-                ref closestProgress);
-        }
-
-        return impactTarget != null;
-    }
-
-    private static void TryConsiderShieldChargeImpactCandidate(
-        Attack attack,
-        Character? candidate,
-        Vector3 start,
-        Vector3 end,
-        float hitRadius,
-        HashSet<Character> hitTargets,
-        ref Character? impactTarget,
-        ref float impactProgress,
-        ref Vector3 impactPoint,
-        ref float closestProgress)
-    {
-        Character owner = attack.m_character;
-        if (candidate == null || candidate == owner || candidate.IsDead() || hitTargets.Contains(candidate))
-        {
-            return;
-        }
-
-        if (!CanShieldAttackHitCharacter(attack, candidate))
-        {
-            return;
-        }
-
-        Vector3 targetPoint = candidate.GetCenterPoint();
-        float progress = SecondaryAttackManager.ClosestSegmentProgress(start, end, targetPoint);
-        Vector3 closestPoint = Vector3.Lerp(start, end, progress);
-        if ((targetPoint - closestPoint).sqrMagnitude > hitRadius * hitRadius || progress >= closestProgress)
-        {
-            return;
-        }
-
-        closestProgress = progress;
-        impactTarget = candidate;
-        impactProgress = progress;
-        impactPoint = closestPoint;
-    }
-
-    private static void ClearShieldChargeScanHits(int hitCount)
-    {
-        int count = Mathf.Min(hitCount, ShieldChargeScanHits.Length);
-        for (int index = 0; index < count; index++)
-        {
-            ShieldChargeScanHits[index] = null!;
-        }
-    }
-
     private static Character? FindShieldBounceTarget(Character owner, Character currentTarget, float searchRadius, HashSet<Character> hitTargets)
     {
         return FindShieldBounceTarget(owner, currentTarget.GetCenterPoint(), currentTarget, searchRadius, hitTargets);
@@ -781,7 +333,7 @@ internal static partial class ShieldRuntimeSystem
         ObjectDB? objectDb = ObjectDB.instance;
         if (objectDb == null)
         {
-            launchData = ProjectileLaunchData.Invalid;
+            launchData = default;
             return false;
         }
 
@@ -821,7 +373,7 @@ internal static partial class ShieldRuntimeSystem
                 : primarySource;
         if (resolvedAttack == null || resolvedAttack.m_attackProjectile == null)
         {
-            launchData = ProjectileLaunchData.Invalid;
+            launchData = default;
             return false;
         }
 
@@ -852,7 +404,7 @@ internal static partial class ShieldRuntimeSystem
         GameObject? projectilePrefab = scene?.GetPrefab(ShieldThrowCatapultProjectilePrefabName);
         if (projectilePrefab == null)
         {
-            launchData = ProjectileLaunchData.Invalid;
+            launchData = default;
             return false;
         }
 
@@ -1102,12 +654,7 @@ internal static partial class ShieldRuntimeSystem
             return;
         }
 
-        EnsureShieldThrowVisualSpin(projectile.m_visual);
-    }
-
-    private static void EnsureShieldThrowVisualSpin(GameObject? visual)
-    {
-        ThrowProjectileVisualSpin.Ensure(visual);
+        ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
     }
 
     private static void MarkShieldProjectile(Projectile projectile)
@@ -1142,7 +689,7 @@ internal static partial class ShieldRuntimeSystem
         {
             projectile.m_visual = existingVisualRoot.gameObject;
             projectile.m_canChangeVisuals = true;
-            EnsureShieldThrowVisualSpin(projectile.m_visual);
+            ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
             return;
         }
 
@@ -1154,7 +701,7 @@ internal static partial class ShieldRuntimeSystem
         projectile.m_visual = visualRoot;
         projectile.m_canChangeVisuals = true;
 
-        EnsureShieldThrowVisualSpin(projectile.m_visual);
+        ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
     }
 
     private static void HideShieldProjectileSourcePresentation(Projectile projectile)
@@ -1187,7 +734,7 @@ internal static partial class ShieldRuntimeSystem
         {
             nview!.GetZDO().Set(ZDOVars.s_visual, thrownShield.m_dropPrefab.name);
             projectile.UpdateVisual();
-            EnsureShieldThrowVisualSpin(projectile.m_visual);
+            ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
             return;
         }
 
@@ -1238,7 +785,7 @@ internal static partial class ShieldRuntimeSystem
         visual.GetComponentInChildren<IEquipmentVisual>()?.Setup(thrownShield.m_variant);
         projectile.m_visual = visual;
 
-        EnsureShieldThrowVisualSpin(projectile.m_visual);
+        ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
     }
 
     private static void PlayShieldProjectileImpactSound(Vector3 position)
@@ -1259,76 +806,6 @@ internal static partial class ShieldRuntimeSystem
 
         GameObject sfxInstance = Object.Instantiate(sfxPrefab, position, Quaternion.identity);
         Object.Destroy(sfxInstance, 6f);
-    }
-
-    private static void PlayShieldThrowChargeStartSfx(Attack attack)
-    {
-        if (attack?.m_character == null)
-        {
-            return;
-        }
-
-        GameObject? sfxPrefab = ZNetScene.instance?.GetPrefab(ShieldThrowChargeStartSfxPrefabName);
-        if (sfxPrefab == null)
-        {
-            if (SecondaryAttackManager.TryMarkCompatibilityWarningReported("shield_throw_charge_start_sfx_missing"))
-            {
-                CaptainValheimPlugin.ModLogger.LogWarning($"Shield throw/charge start SFX prefab '{ShieldThrowChargeStartSfxPrefabName}' was not found.");
-            }
-
-            return;
-        }
-
-        Transform origin = attack.m_character.transform;
-        GameObject sfxInstance = Object.Instantiate(sfxPrefab, origin.position, origin.rotation);
-        Object.Destroy(sfxInstance, 6f);
-    }
-
-    private static void PlayShieldChargeStartVfx(Attack attack)
-    {
-        if (attack?.m_character == null)
-        {
-            return;
-        }
-
-        GameObject? vfxPrefab = ZNetScene.instance?.GetPrefab(ShieldChargeStartVfxPrefabName);
-        if (vfxPrefab == null)
-        {
-            if (SecondaryAttackManager.TryMarkCompatibilityWarningReported("shield_charge_start_vfx_missing"))
-            {
-                CaptainValheimPlugin.ModLogger.LogWarning($"Shield charge start VFX prefab '{ShieldChargeStartVfxPrefabName}' was not found.");
-            }
-
-            return;
-        }
-
-        Transform origin = attack.m_character.transform;
-        Vector3 position = origin.position + origin.forward * ShieldChargeStartVfxForwardOffset + Vector3.up * ShieldChargeStartVfxYOffset;
-        GameObject vfxInstance = Object.Instantiate(vfxPrefab, position, origin.rotation);
-        Object.Destroy(vfxInstance, 6f);
-    }
-
-    private static void PlayShieldChargeBullseyeEffect(Character attacker, Vector3 direction, float hitHeightOffset, float forwardOffset, float extraHeightOffset, float extraForwardOffset)
-    {
-        if (attacker == null)
-        {
-            return;
-        }
-
-        GameObject? effectPrefab = ZNetScene.instance?.GetPrefab(ShieldChargeBullseyeEffectPrefabName);
-        if (effectPrefab == null)
-        {
-            return;
-        }
-
-        Vector3 normalizedDirection = direction.sqrMagnitude > 0.001f
-            ? direction.normalized
-            : attacker.transform.forward;
-        Vector3 effectPosition = attacker.transform.position
-                                 + Vector3.up * Mathf.Max(0f, hitHeightOffset + extraHeightOffset)
-                                 + normalizedDirection * Mathf.Max(0.25f, forwardOffset + extraForwardOffset);
-        GameObject effectInstance = Object.Instantiate(effectPrefab, effectPosition, Quaternion.LookRotation(normalizedDirection, Vector3.up));
-        Object.Destroy(effectInstance, 6f);
     }
 
     private static void DropThrownShield(ItemDrop.ItemData thrownShield, Vector3 position, Quaternion rotation)
@@ -1383,31 +860,12 @@ internal static partial class ShieldRuntimeSystem
         return shieldItem != null;
     }
 
-    private static Character? ResolveProjectileHitCharacter(Collider collider)
-    {
-        if (collider == null)
-        {
-            return null;
-        }
-
-        GameObject hitObject = Projectile.FindHitObject(collider);
-        return hitObject != null ? hitObject.GetComponent<Character>() : null;
-    }
-
-    private static void RegisterShieldProjectileController(Projectile projectile, ShieldProjectileController controller)
-    {
-        ShieldProjectileControllers.Remove(projectile);
-        ShieldProjectileControllers.Add(projectile, controller);
-    }
-
-    private static void UnregisterShieldProjectileController(Projectile projectile)
-    {
-        ShieldProjectileControllers.Remove(projectile);
-    }
-
     internal static bool ShouldHandleShieldProjectileHit(Projectile projectile, Collider collider, Vector3 hitPoint, bool water, Vector3 normal)
     {
-        if (projectile == null || !ShieldProjectileControllers.TryGetValue(projectile, out ShieldProjectileController controller))
+        ShieldProjectileController? controller = projectile != null
+            ? projectile.GetComponent<ShieldProjectileController>()
+            : null;
+        if (controller == null)
         {
             return false;
         }
@@ -1433,7 +891,6 @@ internal static partial class ShieldRuntimeSystem
         private bool _dropped;
         private bool _skillRaised;
         private bool _registeredAsyncWork;
-        private bool _ownsThrownShield;
         private float _returnCollisionIgnoreUntil;
         private Vector3 _lastPosition;
 
@@ -1462,11 +919,9 @@ internal static partial class ShieldRuntimeSystem
             _returningToOwner = returningToOwner;
             _returnCollisionIgnoreUntil = returningToOwner ? Time.time + ShieldThrowReturnCollisionGraceSeconds : 0f;
             _lastPosition = transform.position;
-            RegisterShieldProjectileController(_projectile, this);
             _projectile.m_onHit += OnProjectileHit;
             SecondaryAttackManager.RegisterAsyncSecondaryWork(_owner);
             _registeredAsyncWork = true;
-            _ownsThrownShield = true;
         }
 
         private void Update()
@@ -1489,7 +944,6 @@ internal static partial class ShieldRuntimeSystem
             if (_projectile != null)
             {
                 _projectile.m_onHit -= OnProjectileHit;
-                UnregisterShieldProjectileController(_projectile);
             }
 
             if (!HasAuthority() || _transferred || _dropped || _thrownShield == null)
@@ -1523,7 +977,7 @@ internal static partial class ShieldRuntimeSystem
 
         public bool ShouldIgnoreHit(Collider collider)
         {
-            Character? target = ResolveProjectileHitCharacter(collider);
+            Character? target = ProjectileAccess.GetHitCharacter(collider);
             if (target == _owner)
             {
                 return true;
@@ -1544,14 +998,14 @@ internal static partial class ShieldRuntimeSystem
 
         private void OnProjectileHit(Collider collider, Vector3 hitPoint, bool water, Vector3 normal)
         {
-            if (!_ownsThrownShield || !HasAuthority() || _transferred || _dropped || _thrownShield == null)
+            if (!HasAuthority() || _transferred || _dropped || _thrownShield == null)
             {
                 return;
             }
 
             _lastPosition = hitPoint;
             PlayShieldProjectileImpactSound(hitPoint);
-            Character? hitTarget = ResolveProjectileHitCharacter(collider);
+            Character? hitTarget = ProjectileAccess.GetHitCharacter(collider);
             if (hitTarget != null)
             {
                 _hitTargets.Add(hitTarget);
@@ -1565,7 +1019,7 @@ internal static partial class ShieldRuntimeSystem
             }
 
             Character? owner = _attack?.m_character;
-            if (hitTarget == null && TryRedirectNonCharacterHitToCharacterOrPlayer(owner, hitPoint, normal))
+            if (hitTarget == null && owner != null && TryStartReturnToOwner(hitPoint, normal))
             {
                 return;
             }
@@ -1594,11 +1048,6 @@ internal static partial class ShieldRuntimeSystem
             _dropped = true;
         }
 
-        private bool TryRedirectNonCharacterHitToCharacterOrPlayer(Character? owner, Vector3 hitPoint, Vector3 normal)
-        {
-            return !_returningToOwner && owner != null && TryStartReturnToOwner(hitPoint, normal);
-        }
-
         private bool TryLaunchShieldTowardTarget(Character target, Vector3 hitPoint, Vector3 normal, float damage, int remainingChains, bool allowSkillRaise)
         {
             Vector3 bounceDirection = target.GetCenterPoint() - hitPoint;
@@ -1610,7 +1059,7 @@ internal static partial class ShieldRuntimeSystem
             ProjectileLaunchData nextLaunchData = _shieldThrowTemplateLaunchData;
             if (!nextLaunchData.IsValid && !TryResolveShieldThrowTemplate(out nextLaunchData))
             {
-                nextLaunchData = ProjectileLaunchData.Invalid;
+                nextLaunchData = default;
             }
 
             if (!nextLaunchData.IsValid)
@@ -1657,7 +1106,7 @@ internal static partial class ShieldRuntimeSystem
                 return false;
             }
 
-            Character? character = SecondaryAttackManager.GetHitCharacter(collider);
+            Character? character = ProjectileAccess.GetHitCharacter(collider);
             IDestructible? destructible = character != null ? character : hitObject.GetComponent<IDestructible>();
             if (destructible == null)
             {
@@ -1713,9 +1162,13 @@ internal static partial class ShieldRuntimeSystem
                 float adrenalineFactor =
                     SecondaryAttackRuntimeContext.TryGetActiveAttack(_attack, out ActiveSecondaryAttack? activeAttack) &&
                     activeAttack != null
-                        ? SecondaryAttackAdrenalineSystem.ResolveFactor(activeAttack)
+                        ? SecondaryAttackRuntimeContext.ResolveAdrenalineFactor(activeAttack)
                         : 1f;
-                SecondaryAttackAdrenalineSystem.TryGrantOnceRaw(_attack, character, 1f, adrenalineFactor, "shield:throw");
+                SecondaryAttackRuntimeContext.TryGrantAdrenalineOnce(
+                    _attack,
+                    character,
+                    adrenalineFactor,
+                    "shield:throw");
             }
 
             RaiseShieldThrowSkill(hitData);
@@ -1825,7 +1278,7 @@ internal static partial class ShieldRuntimeSystem
             ProjectileLaunchData returnLaunchData = _shieldThrowTemplateLaunchData;
             if (!returnLaunchData.IsValid && !TryResolveShieldThrowTemplate(out returnLaunchData))
             {
-                returnLaunchData = ProjectileLaunchData.Invalid;
+                returnLaunchData = default;
             }
 
             if (!returnLaunchData.IsValid)
@@ -1900,15 +1353,7 @@ internal static partial class ShieldRuntimeSystem
             }
 
             _thrownShield.m_equipped = false;
-            if (!inventory.CanAddItem(_thrownShield))
-            {
-                DropThrownShield(_thrownShield, _lastPosition, transform.rotation);
-                _dropped = true;
-                DestroyCurrentProjectile();
-                return true;
-            }
-
-            if (!inventory.AddItem(_thrownShield))
+            if (!inventory.CanAddItem(_thrownShield) || !inventory.AddItem(_thrownShield))
             {
                 DropThrownShield(_thrownShield, _lastPosition, transform.rotation);
                 _dropped = true;
@@ -1939,178 +1384,27 @@ internal static partial class ShieldRuntimeSystem
         }
     }
 
-    private static void SetShieldChargeActive(Character character, bool active, float cooldown = 0f, ItemDrop.ItemData? shield = null)
+}
+
+internal sealed class ThrowProjectileVisualSpin : MonoBehaviour
+{
+    private const float DegreesPerSecond = 720f;
+
+    private void LateUpdate()
     {
-        if (character == null)
+        transform.Rotate(Vector3.up, DegreesPerSecond * Time.deltaTime, Space.World);
+    }
+
+    internal static void Ensure(GameObject? visual)
+    {
+        if (visual == null)
         {
             return;
         }
 
-        ShieldChargeRuntimeState state = ShieldChargeRuntimeStates.GetValue(character, _ => new ShieldChargeRuntimeState());
-        state.Active = active;
-        if (!active && cooldown > 0f)
-        {
-            state.CooldownUntil = Mathf.Max(state.CooldownUntil, Time.time + cooldown);
-            ShieldChargeCooldownStatusSystem.Apply(character, shield, cooldown);
-        }
+        ThrowProjectileVisualSpin spin =
+            visual.GetComponent<ThrowProjectileVisualSpin>() ??
+            visual.AddComponent<ThrowProjectileVisualSpin>();
+        spin.enabled = true;
     }
-
-    private sealed class ShieldChargeController : MonoBehaviour
-    {
-        private Attack _attack = null!;
-        private Rigidbody _body = null!;
-        private Vector3 _direction;
-        private HashSet<Character> _hitTargets = null!;
-        private float _remainingDistance;
-        private float _speed;
-        private float _damage;
-        private float _pushForce;
-        private float _hitRadius;
-        private float _hitHeightOffset;
-        private float _collisionRadius;
-        private float _cooldown;
-        private float _vfxForwardOffset;
-        private float _vfxHeightOffset;
-        private bool _skillRaised;
-        private bool _stopped;
-
-        public void Initialize(Attack attack, float travelDistance, float damage, float pushForce, float hitRadius, float configuredSpeed, float cooldown, float vfxForwardOffset, float vfxHeightOffset)
-        {
-            _attack = attack;
-            _body = attack.m_character.GetComponent<Rigidbody>();
-            SetShieldChargeActive(attack.m_character, true);
-            _hitTargets = ShieldChargeAttackStates.GetValue(attack, _ => new ShieldChargeAttackState()).HitTargets;
-            _direction = SecondaryAttackManager.GetSentinelForward(attack.m_character);
-            _remainingDistance = travelDistance;
-            _speed = configuredSpeed > 0f
-                ? configuredSpeed
-                : Mathf.Max(10f, travelDistance / 0.35f);
-            _damage = damage;
-            _pushForce = pushForce;
-            _hitRadius = hitRadius;
-            _hitHeightOffset = Mathf.Max(0.9f, attack.m_character.GetCenterPoint().y - attack.m_character.transform.position.y);
-            _collisionRadius = Mathf.Max(0.2f, attack.m_character.GetRadius() * 0.85f);
-            _cooldown = Mathf.Max(0f, cooldown);
-            _vfxForwardOffset = vfxForwardOffset;
-            _vfxHeightOffset = vfxHeightOffset;
-        }
-
-        private void FixedUpdate()
-        {
-            if (_stopped)
-            {
-                return;
-            }
-
-            if (_attack == null || _attack.m_character == null || _attack.m_character.IsDead() || _body == null)
-            {
-                StopChargeMotion();
-                Destroy(gameObject);
-                return;
-            }
-
-            if (!SecondaryAttackManager.HasCharacterAuthority(_attack.m_character))
-            {
-                StopChargeMotion();
-                Destroy(gameObject);
-                return;
-            }
-
-            if (_remainingDistance <= 0f)
-            {
-                StopChargeMotion();
-                Destroy(gameObject);
-                return;
-            }
-
-            float stepDistance = Mathf.Min(_remainingDistance, _speed * Time.fixedDeltaTime);
-            Vector3 start = _body.position;
-            bool blocked = TryResolveChargeEndPoint(start, stepDistance, out Vector3 end, out float traveledDistance, out Vector3 blockedImpactPoint);
-            Vector3 hitPointOffset = _direction * (_hitRadius * ShieldChargeHitPointForwardOffsetFactor);
-            Vector3 sweepStart = start + Vector3.up * _hitHeightOffset + hitPointOffset;
-            Vector3 sweepEnd = end + Vector3.up * _hitHeightOffset + hitPointOffset;
-            bool impactFound = TryFindShieldChargeImpact(_attack, sweepStart, sweepEnd, _hitRadius, _hitTargets, out Character? _, out float impactProgress, out Vector3 impactPoint);
-            if (impactFound)
-            {
-                traveledDistance *= impactProgress;
-                end = start + _direction * traveledDistance;
-            }
-
-            _attack.m_character.transform.rotation = Quaternion.LookRotation(_direction, Vector3.up);
-            Vector3 currentVelocity = _body.linearVelocity;
-            _body.linearVelocity = new Vector3(0f, currentVelocity.y, 0f);
-            _body.MovePosition(end);
-            _remainingDistance -= traveledDistance;
-            Vector3 resolvedImpactPoint = impactFound ? impactPoint : blockedImpactPoint;
-            if (impactFound || blocked)
-            {
-                bool impactApplied = TryApplyShieldChargeImpact(
-                    _attack,
-                    resolvedImpactPoint,
-                    _direction,
-                    _damage,
-                    _pushForce,
-                    _hitRadius,
-                    _hitTargets,
-                    ref _skillRaised,
-                    applyLowerDamagePerHit: true);
-                if (impactApplied)
-                {
-                    PlayShieldChargeBullseyeEffect(_attack.m_character, _direction, _hitHeightOffset, _collisionRadius + 0.35f, _vfxHeightOffset, _vfxForwardOffset);
-                    CreateShieldHitEffects(_attack, resolvedImpactPoint, Quaternion.identity);
-                }
-            }
-
-            if (blocked || impactFound)
-            {
-                StopChargeMotion();
-                Destroy(gameObject);
-            }
-        }
-
-        private void OnDestroy()
-        {
-            if (_attack != null && _attack.m_character != null)
-            {
-                SetShieldChargeActive(_attack.m_character, false, _cooldown, _attack.m_weapon);
-            }
-
-            StopChargeMotion();
-        }
-
-        private void StopChargeMotion()
-        {
-            if (_stopped || _body == null)
-            {
-                return;
-            }
-
-            Vector3 currentVelocity = _body.linearVelocity;
-            _body.linearVelocity = new Vector3(0f, currentVelocity.y, 0f);
-            _remainingDistance = 0f;
-            enabled = false;
-            _stopped = true;
-        }
-
-        private bool TryResolveChargeEndPoint(Vector3 start, float requestedDistance, out Vector3 end, out float traveledDistance, out Vector3 impactPoint)
-        {
-            Vector3 castOrigin = start + Vector3.up * _hitHeightOffset;
-            float castDistance = Mathf.Max(0f, requestedDistance) + 0.05f;
-            if (castDistance > 0f &&
-                Physics.SphereCast(castOrigin, _collisionRadius, _direction, out RaycastHit hit, castDistance, SecondaryAttackManager.GetShieldChargeCollisionMask(), QueryTriggerInteraction.Ignore))
-            {
-                float safeDistance = Mathf.Max(0f, hit.distance - 0.05f);
-                traveledDistance = Mathf.Min(requestedDistance, safeDistance);
-                end = start + _direction * traveledDistance;
-                impactPoint = hit.point;
-                return true;
-            }
-
-            traveledDistance = requestedDistance;
-            end = start + _direction * requestedDistance;
-            impactPoint = end + Vector3.up * _hitHeightOffset;
-            return false;
-        }
-    }
-
 }
