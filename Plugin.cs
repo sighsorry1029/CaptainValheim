@@ -12,7 +12,7 @@ namespace CaptainValheim;
 public class CaptainValheimPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CaptainValheim";
-    internal const string ModVersion = "1.0.7";
+    internal const string ModVersion = "1.0.8";
     internal const string Author = "sighsorry";
     private const string ModGUID = $"{Author}.{ModName}";
     private static string ConfigFileName = $"{ModGUID}.cfg";
@@ -202,13 +202,13 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     internal sealed class GeneralSettings
     {
         internal ConfigEntry<Toggle> LockConfiguration = null!;
-        internal ConfigEntry<Toggle> ShieldReflectDebugLogging = null!;
+        internal ConfigEntry<Toggle> ShowShieldTooltip = null!;
 
         internal void Bind(CaptainValheimPlugin plugin)
         {
             const string group = "1 - General";
             LockConfiguration = plugin.config(group, "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
-            ShieldReflectDebugLogging = plugin.config(group, "Shield Reflect Debug Logging", Toggle.Off, "Logs shield projectile reflection RPC/context diagnostics. Keep off unless diagnosing multiplayer reflection ownership issues.", synchronizedSetting: false);
+            ShowShieldTooltip = plugin.config(group, "Show Shield Tooltip", Toggle.On, "Shows CaptainValheim guidance on shield item tooltips.", synchronizedSetting: false);
         }
     }
 

@@ -6,7 +6,8 @@ internal static class ShieldTooltipSystem
 {
     internal static void AppendShieldGuidance(ItemDrop.ItemData? item, ref string tooltip)
     {
-        if (!HasEnabledShieldAttack(item))
+        if (CaptainValheimPlugin.Settings.General.ShowShieldTooltip.Value != CaptainValheimPlugin.Toggle.On ||
+            !HasEnabledShieldAttack(item))
         {
             return;
         }

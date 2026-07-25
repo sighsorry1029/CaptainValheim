@@ -80,8 +80,6 @@ internal static partial class SecondaryAttackManager
 
         public ShieldReflectProjectileContext? ProjectileContext { get; set; }
 
-        public string ProjectileContextSource { get; set; } = string.Empty;
-
         public float StaminaBefore { get; set; }
 
         public HitData? Hit { get; set; }
@@ -136,12 +134,9 @@ internal static partial class SecondaryAttackManager
         {
             return BeginShieldReflectCharacterDamageCore(target, hit, out state);
         }
-        catch (Exception exception)
+        catch
         {
             EndShieldReflectCharacterDamage(ref state);
-            LogShieldReflectDebug(
-                "route.constructionFallback",
-                () => $"route.fallback reason={exception.GetType().Name} target={target?.name ?? "<null>"} frame={Time.frameCount}");
             return false;
         }
     }
@@ -224,8 +219,7 @@ internal static partial class SecondaryAttackManager
                 targetZdo.m_uid,
                 projectileOwnerPeerId,
                 snapshot,
-                reflectionEnabled: true,
-                source: "local");
+                reflectionEnabled: true);
             ActiveShieldReflectDamageScopes.Add(scope);
             state = new ShieldReflectCharacterDamageState(scope);
             return false;
@@ -249,16 +243,10 @@ internal static partial class SecondaryAttackManager
         try
         {
             CaptainValheimCharacterRpc.SendShieldReflectDamage(targetNView, envelope.Serialize());
-            LogShieldReflectDebug(
-                "route.sent",
-                () => $"route.sent projectile={snapshot.ProjectileName} eventId={envelope.EventId} projectileId={projectileId} target={targetPlayer.name} targetId={targetZdo.m_uid} sender={projectileOwnerPeerId} frame={Time.frameCount}");
             return true;
         }
-        catch (Exception exception)
+        catch
         {
-            LogShieldReflectDebug(
-                "route.fallback",
-                () => $"route.fallback reason={exception.GetType().Name} projectile={snapshot.ProjectileName} projectileId={projectileId} target={targetPlayer.name} frame={Time.frameCount}");
             return false;
         }
     }
@@ -277,9 +265,6 @@ internal static partial class SecondaryAttackManager
 
         if (!ShieldReflectDamageEnvelope.TryDeserialize(package, out ShieldReflectDamageEnvelope envelope))
         {
-            LogShieldReflectDebug(
-                "receive.invalidPayload",
-                () => $"receive.skip reason=invalid-payload player={player.name} sender={sender} frame={Time.frameCount}");
             return;
         }
 
@@ -293,9 +278,6 @@ internal static partial class SecondaryAttackManager
             sender == 0L ||
             sender != envelope.ProjectileOwnerPeerId)
         {
-            LogShieldReflectDebug(
-                "receive.identity",
-                () => $"receive.skip reason=identity player={player.name} sender={sender} expectedSender={envelope.ProjectileOwnerPeerId} eventId={envelope.EventId} projectileId={envelope.ProjectileId} targetId={envelope.TargetId} actualTargetId={actualTargetId} frame={Time.frameCount}");
             return;
         }
 
@@ -306,9 +288,6 @@ internal static partial class SecondaryAttackManager
             envelope.TargetId);
         if (!TryMarkShieldReflectEventDelivered(eventKey))
         {
-            LogShieldReflectDebug(
-                "receive.duplicate",
-                () => $"receive.skip reason=duplicate player={player.name} eventId={envelope.EventId} projectileId={envelope.ProjectileId} targetId={envelope.TargetId} frame={Time.frameCount}");
             return;
         }
 
@@ -321,20 +300,12 @@ internal static partial class SecondaryAttackManager
         }
 
         bool reflectionEnabled = senderOwnsLiveProjectile && envelope.ProjectileContext.IsValid;
-        if (!senderOwnsLiveProjectile)
-        {
-            LogShieldReflectDebug(
-                "receive.ownerMismatch",
-                () => $"receive.fallback reason=live-owner-mismatch player={player.name} sender={sender} projectileId={envelope.ProjectileId} liveOwner={liveProjectileZdo!.GetOwner()} frame={Time.frameCount}");
-        }
-
         ShieldReflectDamageScope scope = new(
             player,
             envelope.TargetId,
             envelope.ProjectileOwnerPeerId,
             envelope.ProjectileContext,
-            reflectionEnabled,
-            source: "remote-envelope");
+            reflectionEnabled);
         ActiveShieldReflectDamageScopes.Add(scope);
 
         try
@@ -348,23 +319,6 @@ internal static partial class SecondaryAttackManager
         finally
         {
             RemoveShieldReflectDamageScope(scope);
-        }
-    }
-
-    internal static void LogShieldReflectDebug(string key, Func<string> messageFactory)
-    {
-        try
-        {
-            if (CaptainValheimPlugin.Settings.General.ShieldReflectDebugLogging.Value != CaptainValheimPlugin.Toggle.On)
-            {
-                return;
-            }
-
-            CaptainValheimPlugin.ModLogger.LogInfo($"[ShieldReflect:{key}] {messageFactory()}");
-        }
-        catch
-        {
-            // Diagnostics must never interrupt damage delivery.
         }
     }
 
@@ -394,11 +348,9 @@ internal static partial class SecondaryAttackManager
         if (TryPeekShieldReflectContext(
                 player,
                 hit,
-                out ShieldReflectProjectileContext projectileContext,
-                out string source))
+                out ShieldReflectProjectileContext projectileContext))
         {
             context.ProjectileContext = projectileContext;
-            context.ProjectileContextSource = source;
         }
 
         ActiveShieldReflectBlockAttackContexts.Add(context);
@@ -508,9 +460,6 @@ internal static partial class SecondaryAttackManager
         Player player = context.Player;
         if (context.BlockedDamage <= 0.001f)
         {
-            LogShieldReflectDebug(
-                "block.notSuccessful",
-                () => $"block.skip player={player.name} blockDamageDelta={context.BlockedDamage:0.###} source={context.ProjectileContextSource} frame={Time.frameCount}");
             return;
         }
 
@@ -520,8 +469,7 @@ internal static partial class SecondaryAttackManager
             context.Blocker,
             context.Definition,
             actualBlockStaminaCost,
-            context.ProjectileContext.Value,
-            context.ProjectileContextSource);
+            context.ProjectileContext.Value);
     }
 
     private static void FinalizeShieldReflect(
@@ -529,17 +477,13 @@ internal static partial class SecondaryAttackManager
         ItemDrop.ItemData blocker,
         SecondaryAttackDefinition definition,
         float actualBlockStaminaCost,
-        ShieldReflectProjectileContext projectileContext,
-        string source)
+        ShieldReflectProjectileContext projectileContext)
     {
         if (!projectileContext.IsValid ||
             projectileContext.Water ||
             !projectileContext.Blockable ||
             projectileContext.Reflected)
         {
-            LogShieldReflectDebug(
-                "finalize.invalidProjectile",
-                () => $"finalize.skip player={player.name} projectile={projectileContext.ProjectileName} water={projectileContext.Water} reflected={projectileContext.Reflected} source={source} frame={Time.frameCount}");
             return;
         }
 
@@ -547,17 +491,11 @@ internal static partial class SecondaryAttackManager
                              (Mathf.Max(0f, definition.ShieldProjectileReflectStaminaFactor) - 1f);
         if (staminaDelta > 0f && !player.HaveStamina(staminaDelta))
         {
-            LogShieldReflectDebug(
-                "finalize.stamina",
-                () => $"finalize.skip player={player.name} projectile={projectileContext.ProjectileName} staminaDelta={staminaDelta:0.###} source={source} frame={Time.frameCount}");
             return;
         }
 
         if (!TryReflectShieldProjectile(player, blocker, definition, projectileContext))
         {
-            LogShieldReflectDebug(
-                "finalize.spawn",
-                () => $"finalize.skip reason=spawn-failed player={player.name} projectile={projectileContext.ProjectileName} source={source} frame={Time.frameCount}");
             return;
         }
 
@@ -569,10 +507,6 @@ internal static partial class SecondaryAttackManager
         {
             player.AddStamina(-staminaDelta);
         }
-
-        LogShieldReflectDebug(
-            "finalize.success",
-            () => $"finalize.success player={player.name} projectile={projectileContext.ProjectileName} source={source} blockStamina={actualBlockStaminaCost:0.###} staminaDelta={staminaDelta:0.###} frame={Time.frameCount}");
     }
 
     private static bool TryReflectShieldProjectile(
@@ -640,7 +574,7 @@ internal static partial class SecondaryAttackManager
             ShieldRuntimeSystem.MarkReflectedProjectile(reflectedProjectile);
             return true;
         }
-        catch (Exception exception)
+        catch
         {
             if (reflectedObject != null)
             {
@@ -654,9 +588,6 @@ internal static partial class SecondaryAttackManager
                 }
             }
 
-            LogShieldReflectDebug(
-                "spawn.exception",
-                () => $"spawn.skip reason={exception.GetType().Name} player={player.name} projectile={projectileContext.ProjectileName} frame={Time.frameCount}");
             return false;
         }
     }
@@ -694,13 +625,11 @@ internal static partial class SecondaryAttackManager
     private static bool TryPeekShieldReflectContext(
         Player player,
         HitData hit,
-        out ShieldReflectProjectileContext context,
-        out string source)
+        out ShieldReflectProjectileContext context)
     {
         if (ActiveShieldReflectDamageScopes.Count == 0)
         {
             context = default;
-            source = string.Empty;
             return false;
         }
 
@@ -710,12 +639,10 @@ internal static partial class SecondaryAttackManager
             !ReferenceEquals(scope.BoundHit, hit))
         {
             context = default;
-            source = string.Empty;
             return false;
         }
 
         context = scope.ProjectileContext;
-        source = scope.Source;
         return context.IsValid;
     }
 
@@ -814,8 +741,6 @@ internal static partial class SecondaryAttackManager
         public Projectile? Projectile { get; }
 
         public string ProjectilePrefabName { get; }
-
-        public string ProjectileName => Projectile != null ? Projectile.name : ProjectilePrefabName;
 
         public Vector3 HitPoint { get; }
 
@@ -1075,15 +1000,13 @@ internal static partial class SecondaryAttackManager
             ZDOID targetId,
             long originalSenderPeerId,
             ShieldReflectProjectileContext projectileContext,
-            bool reflectionEnabled,
-            string source)
+            bool reflectionEnabled)
         {
             Player = player;
             TargetId = targetId;
             OriginalSenderPeerId = originalSenderPeerId;
             ProjectileContext = projectileContext;
             ReflectionEnabled = reflectionEnabled;
-            Source = source;
         }
 
         internal Player Player { get; }
@@ -1095,8 +1018,6 @@ internal static partial class SecondaryAttackManager
         internal ShieldReflectProjectileContext ProjectileContext { get; }
 
         internal bool ReflectionEnabled { get; }
-
-        internal string Source { get; }
 
         internal HitData? BoundHit { get; set; }
 

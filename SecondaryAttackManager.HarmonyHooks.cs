@@ -220,11 +220,9 @@ internal static class HumanoidBlockAttackPatch
         {
             SecondaryAttackManager.FinalizeBlockAttack(__result, hit, __state);
         }
-        catch (Exception exception)
+        catch
         {
-            SecondaryAttackManager.LogShieldReflectDebug(
-                "block.finalizeException",
-                () => $"block.finalize.skip reason={exception.GetType().Name} frame={Time.frameCount}");
+            // Reflection failures must not interrupt the completed vanilla block.
         }
         finally
         {

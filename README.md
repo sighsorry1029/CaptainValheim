@@ -48,7 +48,10 @@ Projectile Reflection rewards accurate blocking by letting guarded projectile hi
 
 CaptainValheim creates:
 
+- `BepInEx/config/sighsorry.CaptainValheim.cfg`
 - `BepInEx/config/CaptainValheim.yml`
+
+`Show Shield Tooltip` in the BepInEx config controls the extra CaptainValheim guidance appended to shield item tooltips. It defaults to `On` and is a client-only display setting that is not synchronized with the server.
 
 The root `Global` block defines fallback behavior for all shields. Any shield prefab listed below `Global` inherits those defaults and only overrides the fields you write.
 

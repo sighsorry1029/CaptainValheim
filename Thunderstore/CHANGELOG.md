@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.8
+
+- Added the client-only `Show Shield Tooltip` setting, enabled by default, so each player can hide CaptainValheim guidance from shield item tooltips without changing server behavior.
+- Removed the shield reflection debug logging option and its diagnostic-only logging and data plumbing.
+
 ## 1.0.7
 
 - Added localized shield key hints, contextual shield tooltip guidance, and a new Compendium page explaining Shield Strike, Throw, Charge, Projectile Reflection, and Block Charge.
