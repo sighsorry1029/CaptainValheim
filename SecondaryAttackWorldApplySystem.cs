@@ -17,7 +17,6 @@ internal static class SecondaryAttackWorldApplySystem
             return SecondaryAttackAppliedWorldSnapshot.Empty;
         }
 
-        SecondaryAttackObjectDbStateStore.Capture(objectDb);
         SecondaryAttackObjectDbStateStore.Restore(objectDb);
         ShieldRuntimeSystem.ResetTransientState();
         Dictionary<string, SecondaryAttackDefinition> appliedDefinitions = new(StringComparer.OrdinalIgnoreCase);
@@ -131,7 +130,6 @@ internal static class SecondaryAttackWorldApplySystem
                          EffectList? blockChargeEffects) in mutationPlan)
             {
                 ApplyShieldBlockCharge(
-                    objectDb,
                     sharedData,
                     definition,
                     blockChargeEffects);
@@ -174,7 +172,6 @@ internal static class SecondaryAttackWorldApplySystem
     }
 
     private static void ApplyShieldBlockCharge(
-        ObjectDB objectDb,
         ItemDrop.ItemData.SharedData sharedData,
         SecondaryAttackDefinition definition,
         EffectList? plannedBlockChargeEffects)
@@ -239,7 +236,7 @@ internal static class SecondaryAttackWorldApplySystem
                 continue;
             }
 
-            EffectList cloned = SecondaryAttackObjectDbStateStore.CloneEffectList(source, maxVariant);
+            EffectList cloned = CloneEffectList(source, maxVariant);
             if (HasEffect(cloned))
             {
                 blockChargeEffects = cloned;
@@ -277,6 +274,36 @@ internal static class SecondaryAttackWorldApplySystem
 
         blockChargeEffects = new EffectList { m_effectPrefabs = effects.ToArray() };
         return true;
+    }
+
+    private static EffectList CloneEffectList(EffectList? source, int maxVariant)
+    {
+        EffectList.EffectData[] sourceEffects = source?.m_effectPrefabs ?? [];
+        List<EffectList.EffectData> clonedEffects = new(sourceEffects.Length);
+        foreach (EffectList.EffectData sourceEffect in sourceEffects)
+        {
+            if (sourceEffect.m_variant > maxVariant)
+            {
+                continue;
+            }
+
+            clonedEffects.Add(new EffectList.EffectData
+            {
+                m_prefab = sourceEffect.m_prefab,
+                m_enabled = sourceEffect.m_enabled,
+                m_variant = sourceEffect.m_variant,
+                m_attach = sourceEffect.m_attach,
+                m_follow = sourceEffect.m_follow,
+                m_inheritParentRotation = sourceEffect.m_inheritParentRotation,
+                m_inheritParentScale = sourceEffect.m_inheritParentScale,
+                m_multiplyParentVisualScale = sourceEffect.m_multiplyParentVisualScale,
+                m_randomRotation = sourceEffect.m_randomRotation,
+                m_scale = sourceEffect.m_scale,
+                m_childTransform = sourceEffect.m_childTransform
+            });
+        }
+
+        return new EffectList { m_effectPrefabs = clonedEffects.ToArray() };
     }
 
     private static bool HasEffect(EffectList? effectList)

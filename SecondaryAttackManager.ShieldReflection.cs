@@ -322,23 +322,23 @@ internal static partial class SecondaryAttackManager
         }
     }
 
-    internal static BlockAttackContext CaptureBlockAttackContext(
+    internal static BlockAttackContext? CaptureBlockAttackContext(
         Humanoid humanoid,
         HitData hit,
         ItemDrop.ItemData blocker)
     {
-        BlockAttackContext context = new();
         if (humanoid is not Player player || blocker == null || hit == null)
         {
-            return context;
+            return null;
         }
 
         if (!ShieldRuntimeSystem.TryGetDefinition(blocker, out SecondaryAttackDefinition definition) ||
             !definition.ShieldProjectileReflect)
         {
-            return context;
+            return null;
         }
 
+        BlockAttackContext context = new();
         context.Player = player;
         context.Blocker = blocker;
         context.Definition = definition;
@@ -381,7 +381,7 @@ internal static partial class SecondaryAttackManager
         }
     }
 
-    internal static void EndShieldReflectBlockAttack(ref BlockAttackContext context)
+    internal static void EndShieldReflectBlockAttack(ref BlockAttackContext? context)
     {
         if (context != null)
         {
@@ -396,7 +396,7 @@ internal static partial class SecondaryAttackManager
             }
         }
 
-        context = null!;
+        context = null;
     }
 
     internal static void BeginShieldReflectRpcDamage(
@@ -444,7 +444,7 @@ internal static partial class SecondaryAttackManager
         RemoveShieldReflectDamageScope(scope);
     }
 
-    internal static void FinalizeBlockAttack(bool result, HitData hit, BlockAttackContext context)
+    internal static void FinalizeBlockAttack(bool result, HitData hit, BlockAttackContext? context)
     {
         if (!result ||
             hit == null ||

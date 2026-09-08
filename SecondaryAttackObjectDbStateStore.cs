@@ -11,36 +11,6 @@ internal static class SecondaryAttackObjectDbStateStore
         ItemDrop.ItemData.SharedData,
         OriginalWeaponState> Snapshots = new();
 
-    public static void Capture(ObjectDB objectDb)
-    {
-        foreach (GameObject itemPrefab in objectDb.m_items)
-        {
-            if (itemPrefab == null)
-            {
-                continue;
-            }
-
-            ItemDrop itemDrop = itemPrefab.GetComponent<ItemDrop>();
-            if (itemDrop == null)
-            {
-                continue;
-            }
-
-            ItemDrop.ItemData.SharedData? sharedData = itemDrop.m_itemData?.m_shared;
-            if (sharedData == null)
-            {
-                continue;
-            }
-
-            if (sharedData.m_itemType != ItemDrop.ItemData.ItemType.Shield)
-            {
-                continue;
-            }
-
-            Snapshots.GetValue(sharedData, data => new OriginalWeaponState(data));
-        }
-    }
-
     public static void Restore(ObjectDB objectDb)
     {
         HashSet<ItemDrop.ItemData.SharedData> restoredSharedData = new();
@@ -169,39 +139,10 @@ internal static class SecondaryAttackObjectDbStateStore
         state.RecordGenericDamage(value);
     }
 
-    internal static EffectList CloneEffectList(EffectList? source, int maxVariant = int.MaxValue)
-    {
-        EffectList.EffectData[] sourceEffects = source?.m_effectPrefabs ?? [];
-        List<EffectList.EffectData> clonedEffects = new(sourceEffects.Length);
-        foreach (EffectList.EffectData sourceEffect in sourceEffects)
-        {
-            if (sourceEffect.m_variant > maxVariant)
-            {
-                continue;
-            }
-
-            clonedEffects.Add(new EffectList.EffectData
-            {
-                m_prefab = sourceEffect.m_prefab,
-                m_enabled = sourceEffect.m_enabled,
-                m_variant = sourceEffect.m_variant,
-                m_attach = sourceEffect.m_attach,
-                m_follow = sourceEffect.m_follow,
-                m_inheritParentRotation = sourceEffect.m_inheritParentRotation,
-                m_inheritParentScale = sourceEffect.m_inheritParentScale,
-                m_multiplyParentVisualScale = sourceEffect.m_multiplyParentVisualScale,
-                m_randomRotation = sourceEffect.m_randomRotation,
-                m_scale = sourceEffect.m_scale,
-                m_childTransform = sourceEffect.m_childTransform
-            });
-        }
-
-        return new EffectList { m_effectPrefabs = clonedEffects.ToArray() };
-    }
-
     private static OriginalWeaponState GetOrCaptureState(
         ItemDrop.ItemData.SharedData sharedData)
     {
+        // Capture the original values once, immediately before the first managed write.
         return Snapshots.GetValue(sharedData, data => new OriginalWeaponState(data));
     }
 

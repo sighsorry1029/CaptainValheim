@@ -1,14 +1,111 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
 namespace CaptainValheim;
 
+internal readonly struct ProjectileLaunchData
+{
+    internal ProjectileLaunchData(
+        GameObject? projectilePrefab,
+        float projectileVelocity,
+        float projectileVelocityMin,
+        float attackHitNoise,
+        bool useRandomVelocity)
+    {
+        ProjectilePrefab = projectilePrefab;
+        ProjectileVelocity = projectileVelocity;
+        ProjectileVelocityMin = projectileVelocityMin;
+        AttackHitNoise = attackHitNoise;
+        UseRandomVelocity = useRandomVelocity;
+    }
+
+    internal GameObject? ProjectilePrefab { get; }
+
+    internal float ProjectileVelocity { get; }
+
+    internal float ProjectileVelocityMin { get; }
+
+    internal float AttackHitNoise { get; }
+
+    internal bool UseRandomVelocity { get; }
+
+    internal bool IsValid => ProjectilePrefab != null;
+}
+
 internal static partial class ShieldRuntimeSystem
 {
+    private const string ShieldThrowCatapultProjectilePrefabName = "Catapult_Ammo_Projectile";
+    private const string ShieldThrowProjectileMarkerKey = "CaptainValheim_ShieldThrowProjectile";
+    private const string ShieldThrowProjectileVisualRootName = "CaptainValheim_ShieldThrowVisualRoot";
+    private const string ThrownShieldPickupMarkerKey = "CaptainValheim_ThrownShieldPickup";
+    private const string ShieldThrowImpactAoePrefabName = "Catapult_Ammo_Projectile_AOE";
+    private const string ShieldThrowImpactSfxChildName = "sfx";
+    private const string ArrowHitSfxPrefabName = "sfx_arrow_hit";
+    private const float ShieldThrowForceReference = 20f;
+    private const float ShieldThrowMinTtl = 0.3f;
+    private const float ShieldThrowReturnCatchRadius = 1.25f;
+    private const float ShieldThrowReturnSpawnOffset = 0.25f;
+    private const float ShieldThrowRedirectSurfaceOffset = 0.15f;
+    private const float ShieldThrowReturnTtlPadding = 0.25f;
+    private const float ShieldThrowReturnCollisionGraceSeconds = 0.12f;
+    private const float ShieldThrowReturnedShieldEquipRetrySeconds = 1f;
+    private const float ShieldThrowReturnedShieldEquipRetryInterval = 0.1f;
+    private const float ShieldThrowDefaultHitRadius = 0.7f;
+    private const float ShieldThrowCatapultProjectileSpeed = 18f;
+
+    private static readonly ConditionalWeakTable<Humanoid, ReturnedShieldEquipState> ReturnedShieldEquipStates = new();
+    private static readonly RaycastHit[] AimRayHits = new RaycastHit[64];
+    private static ProjectileLaunchData _shieldThrowTemplateLaunchData;
+    private static string _shieldThrowTemplateSource = string.Empty;
+
     private static readonly List<Renderer> ShieldProjectileRendererBuffer = new();
+
+    internal static void ResetTransientState()
+    {
+        _shieldThrowTemplateLaunchData = default;
+        _shieldThrowTemplateSource = string.Empty;
+    }
+
+    internal static void UpdateReturnedShieldAutoEquip(Humanoid humanoid)
+    {
+        if (humanoid == null || !ReturnedShieldEquipStates.TryGetValue(humanoid, out ReturnedShieldEquipState? state))
+        {
+            return;
+        }
+
+        if (state.Shield == null || state.Shield.m_equipped || Time.time > state.RetryUntil)
+        {
+            ReturnedShieldEquipStates.Remove(humanoid);
+            return;
+        }
+
+        if (Time.frameCount < state.NextRetryFrame || Time.time < state.NextRetry)
+        {
+            return;
+        }
+
+        state.NextRetry = Time.time + ShieldThrowReturnedShieldEquipRetryInterval;
+        humanoid.EquipItem(state.Shield);
+        if (state.Shield.m_equipped)
+        {
+            ReturnedShieldEquipStates.Remove(humanoid);
+        }
+    }
+
+    private static void EquipReturnedShieldNowOrLater(Humanoid humanoid, ItemDrop.ItemData shield)
+    {
+        if (humanoid == null || shield == null)
+        {
+            return;
+        }
+
+        ReturnedShieldEquipStates.Remove(humanoid);
+        ReturnedShieldEquipStates.Add(humanoid, new ReturnedShieldEquipState(shield));
+    }
 
     private static void StartShieldThrow(Attack attack, SecondaryAttackDefinition definition)
     {
@@ -220,64 +317,6 @@ internal static partial class ShieldRuntimeSystem
             ? UnityEngine.Random.Range(launchData.ProjectileVelocityMin, launchData.ProjectileVelocity)
             : launchData.ProjectileVelocity;
         return Mathf.Max(18f, speed);
-    }
-
-    internal static bool TryCalculateShieldSpecialRawStaminaCost(
-        ItemDrop.ItemData shieldWeapon,
-        SecondaryAttackDefinition definition,
-        ShieldSpecialMode mode,
-        out float rawAttackStamina)
-    {
-        rawAttackStamina = 0f;
-        if (shieldWeapon == null || definition == null)
-        {
-            return false;
-        }
-
-        ShieldSpecialSecondaryBehavior? behavior = definition.ShieldSpecial;
-        if (behavior == null)
-        {
-            return false;
-        }
-
-        float baseBlockPower = shieldWeapon.GetBaseBlockPower(shieldWeapon.m_quality);
-        float normalizedBaseBlockPower = Mathf.Sqrt(Mathf.Max(0f, baseBlockPower));
-        switch (mode)
-        {
-            case ShieldSpecialMode.PrimaryAttack:
-                if (!behavior.HasShieldPrimaryAttack ||
-                    behavior.ShieldPrimaryAttackStaminaFactor <= 0f)
-                {
-                    return false;
-                }
-
-                rawAttackStamina = Mathf.Max(
-                    0f,
-                    behavior.ShieldPrimaryAttackStaminaFactor * normalizedBaseBlockPower);
-                return true;
-            case ShieldSpecialMode.Charge:
-                if (!behavior.HasShieldCharge ||
-                    behavior.ShieldChargeStaminaFactor <= 0f)
-                {
-                    return false;
-                }
-
-                rawAttackStamina = Mathf.Max(
-                    0f,
-                    behavior.ShieldChargeStaminaFactor * normalizedBaseBlockPower);
-                return true;
-            default:
-                if (!behavior.HasShieldThrow ||
-                    behavior.ShieldThrowStaminaFactor <= 0f)
-                {
-                    return false;
-                }
-
-                rawAttackStamina = Mathf.Max(
-                    0f,
-                    behavior.ShieldThrowStaminaFactor * normalizedBaseBlockPower);
-                return true;
-        }
     }
 
     private static Character? FindShieldBounceTarget(Character owner, Character currentTarget, float searchRadius, HashSet<Character> hitTargets)
@@ -872,6 +911,25 @@ internal static partial class ShieldRuntimeSystem
 
         controller.HandleHit(collider, hitPoint, water, normal);
         return true;
+    }
+
+    private sealed class ReturnedShieldEquipState
+    {
+        public ReturnedShieldEquipState(ItemDrop.ItemData shield)
+        {
+            Shield = shield;
+            RetryUntil = Time.time + ShieldThrowReturnedShieldEquipRetrySeconds;
+            NextRetry = Time.time;
+            NextRetryFrame = Time.frameCount + 1;
+        }
+
+        public ItemDrop.ItemData Shield { get; }
+
+        public float RetryUntil { get; }
+
+        public float NextRetry { get; set; }
+
+        public int NextRetryFrame { get; }
     }
 
     private sealed class ShieldProjectileController : MonoBehaviour

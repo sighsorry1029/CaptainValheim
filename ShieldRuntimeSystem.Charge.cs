@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -6,8 +7,97 @@ namespace CaptainValheim;
 
 internal static partial class ShieldRuntimeSystem
 {
+    private const string ShieldChargeBullseyeEffectPrefabName = "vfx_archerytarget_bullseye";
+    private const string ShieldChargeStartVfxPrefabName = "vfx_blocked";
+    private const float ShieldChargeHitRadiusReferenceForce = 20f;
+    private const float ShieldChargeHitPointForwardOffsetFactor = 0.5f;
     private const float ShieldChargeStartVfxForwardOffset = 0f;
     private const float ShieldChargeStartVfxYOffset = 0.5f;
+
+    private static readonly ConditionalWeakTable<Character, ShieldChargeRuntimeState> ShieldChargeRuntimeStates = new();
+    private static readonly Collider[] ShieldChargeImpactHits = new Collider[128];
+    private static readonly Collider[] ShieldChargeScanHits = new Collider[128];
+    private static readonly HashSet<IDestructible> ShieldChargeImpactedTargets = new();
+    private static readonly HashSet<Character> ShieldChargeScanCandidates = new();
+    private static readonly List<ShieldImpactTarget> ShieldChargeImpactTargets = [];
+    private static readonly List<Collider> ShieldChargeTargetColliders = [];
+
+    internal static bool CanStartShieldCharge(Humanoid humanoid)
+    {
+        if (humanoid == null || IsShieldChargeActive(humanoid))
+        {
+            return false;
+        }
+
+        if (!ShieldChargeRuntimeStates.TryGetValue(humanoid, out ShieldChargeRuntimeState? state))
+        {
+            return true;
+        }
+
+        return Time.time >= state.CooldownUntil;
+    }
+
+    internal static bool IsShieldChargeActive(Humanoid humanoid)
+    {
+        return humanoid != null &&
+               ShieldChargeRuntimeStates.TryGetValue(humanoid, out ShieldChargeRuntimeState? state) &&
+               state.Active;
+    }
+
+    internal static bool TryStartShieldChargeDirect(Humanoid humanoid, ItemDrop.ItemData shieldWeapon, SecondaryAttackDefinition definition)
+    {
+        if (humanoid == null ||
+            shieldWeapon == null ||
+            definition?.ShieldSpecial is not { } behavior ||
+            !behavior.HasShieldCharge ||
+            behavior.ShieldChargeDistance <= 0f)
+        {
+            return false;
+        }
+
+        if (!TryCreateDirectShieldChargeAttack(humanoid, shieldWeapon, out Attack? attack))
+        {
+            return false;
+        }
+
+        if (TryCalculateShieldSpecialRawStaminaCost(shieldWeapon, definition, ShieldSpecialMode.Charge, out float rawAttackStamina))
+        {
+            attack.m_attackStamina = rawAttackStamina;
+        }
+
+        float staminaCost = attack.GetAttackStamina();
+        if (staminaCost > 0f && !humanoid.HaveStamina(staminaCost))
+        {
+            return false;
+        }
+
+        SecondaryAttackRuntimeContext.SetActiveAttack(attack, new ActiveSecondaryAttack(definition, ShieldSpecialMode.Charge));
+        SecondaryAttackRuntimeContext.ResetAdrenaline(attack);
+        SecondaryAttackManager.PlayTriggeredAttackEffects(attack, behavior.ShieldChargeDurabilityFactor);
+        StartShieldCharge(attack, definition);
+        return true;
+    }
+
+    private static bool TryCreateDirectShieldChargeAttack(Humanoid humanoid, ItemDrop.ItemData shieldWeapon, out Attack attack)
+    {
+        attack = null!;
+        if (humanoid == null || shieldWeapon == null)
+        {
+            return false;
+        }
+
+        Attack sourceAttack = shieldWeapon.m_shared?.m_secondaryAttack ?? new Attack();
+        ItemDrop? prefabItemDrop = shieldWeapon.m_dropPrefab != null ? shieldWeapon.m_dropPrefab.GetComponent<ItemDrop>() : null;
+        if (ObjectDB.instance != null && prefabItemDrop != null)
+        {
+            sourceAttack = SecondaryAttackManager.ResolveSourceAttack(prefabItemDrop);
+        }
+
+        attack = SecondaryAttackManager.BuildSecondaryAttack(sourceAttack);
+        attack.m_character = humanoid;
+        attack.m_weapon = shieldWeapon;
+        return true;
+    }
 
     private static void StartShieldCharge(Attack attack, SecondaryAttackDefinition definition)
     {
@@ -451,6 +541,24 @@ internal static partial class ShieldRuntimeSystem
             state.CooldownUntil = Mathf.Max(state.CooldownUntil, Time.time + cooldown);
             ShieldChargeCooldownStatusSystem.Apply(character, shield, cooldown);
         }
+    }
+
+    private sealed class ShieldChargeRuntimeState
+    {
+        public bool Active { get; set; }
+        public float CooldownUntil { get; set; }
+    }
+
+    private readonly struct ShieldImpactTarget
+    {
+        public ShieldImpactTarget(IDestructible destructible, Collider collider)
+        {
+            Destructible = destructible;
+            Collider = collider;
+        }
+
+        public IDestructible Destructible { get; }
+        public Collider Collider { get; }
     }
 
     private sealed class ShieldChargeController : MonoBehaviour

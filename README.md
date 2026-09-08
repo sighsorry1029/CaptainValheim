@@ -90,5 +90,17 @@ Save translation files as UTF-8, then restart Valheim or reselect the language a
 - Can pass shield hit context to WarfareTweaks so configured Warfare effects apply cleanly to shield attacks and shield charges.
 - Designed to coexist with SecondaryAttacks, which handles non-shield ranged, melee, bomb, staff, and Blood Magic behaviors.
 
+## Building
+
+Build against a local Valheim installation with BepInEx and the publicized game assemblies configured in `environment.props`.
+
+For normal development, build Debug and automatically copy the final merged plugin DLL into the configured Valheim plugins folder:
+
+```text
+dotnet build CaptainValheim.csproj -c Debug -p:DeployToGame=true
+```
+
+Use `-p:DeployToGame=false` to skip the game DLL copies. The legacy `SkipDeployment=true` option is still supported when `DeployToGame` is not specified. Debug builds do not update the release manifest or generate packages. Use Release only for an explicitly requested release; `SkipPackaging=true` skips its manifest update and Thunderstore/Nexus packages.
+
 ## Github
 https://github.com/sighsorry1029/CaptainValheim

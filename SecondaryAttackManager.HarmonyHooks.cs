@@ -208,13 +208,13 @@ internal static class HumanoidPickupThrownShieldPatch
 internal static class HumanoidBlockAttackPatch
 {
     [HarmonyPriority(Priority.Last)]
-    private static void Prefix(Humanoid __instance, HitData hit, ItemDrop.ItemData ___m_leftItem, out SecondaryAttackManager.BlockAttackContext __state)
+    private static void Prefix(Humanoid __instance, HitData hit, ItemDrop.ItemData ___m_leftItem, out SecondaryAttackManager.BlockAttackContext? __state)
     {
         __state = SecondaryAttackManager.CaptureBlockAttackContext(__instance, hit, ___m_leftItem);
     }
 
     [HarmonyPriority(Priority.First)]
-    private static void Postfix(bool __result, HitData hit, ref SecondaryAttackManager.BlockAttackContext __state)
+    private static void Postfix(bool __result, HitData hit, ref SecondaryAttackManager.BlockAttackContext? __state)
     {
         try
         {
@@ -232,7 +232,7 @@ internal static class HumanoidBlockAttackPatch
 
     private static Exception? Finalizer(
         Exception? __exception,
-        ref SecondaryAttackManager.BlockAttackContext __state)
+        ref SecondaryAttackManager.BlockAttackContext? __state)
     {
         SecondaryAttackManager.EndShieldReflectBlockAttack(ref __state);
         return __exception;

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.9
+
+- Reorganized shield throw and charge state alongside their runtime code and removed redundant attack setup forwarding without changing combat rules.
+- Removed an unnecessary ObjectDB snapshot pass while retaining capture-before-write and conditional restoration of modified shield data.
+- Avoided allocating reflection block contexts for characters and shields that do not use projectile reflection.
+- Added `DeployToGame` support for automatic local DLL updates after Debug builds, plus options to skip game copies or release packaging during validation.
+
 ## 1.0.8
 
 - Added the client-only `Show Shield Tooltip` setting, enabled by default, so each player can hide CaptainValheim guidance from shield item tooltips without changing server behavior.
