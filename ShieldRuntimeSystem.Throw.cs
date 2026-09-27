@@ -127,7 +127,7 @@ internal static partial class ShieldRuntimeSystem
 
         attack.GetProjectileSpawnPoint(out Vector3 spawnPoint, out Vector3 aimDirection);
         float blockPower = GetShieldBlockPower(attack);
-        float deflectionForce = attack.m_weapon.GetDeflectionForce();
+        float deflectionForce = attack.GetWeapon().GetDeflectionForce();
         float damage = Mathf.Max(0f, blockPower * behavior.ShieldThrowDamageFactor);
         float pushForce = Mathf.Max(0f, deflectionForce * behavior.ShieldThrowPushFactor);
         float searchRadius = CalculateShieldThrowSearchRadius(deflectionForce, behavior.ShieldThrowRadiusFactor);
@@ -170,9 +170,9 @@ internal static partial class ShieldRuntimeSystem
 
     private static Vector3 ResolveShieldThrowAimDirection(Attack attack, Vector3 spawnPoint, Vector3 fallbackAimDirection, float maxTravelDistance)
     {
-        if (attack.m_baseAI != null)
+        if (attack.GetAttackBaseAI() != null)
         {
-            Character? target = attack.m_baseAI.GetTargetCreature();
+            Character? target = attack.GetAttackBaseAI().GetTargetCreature();
             if (target != null)
             {
                 Vector3 targetDirection = target.GetCenterPoint() - spawnPoint;
@@ -183,7 +183,7 @@ internal static partial class ShieldRuntimeSystem
             }
         }
 
-        if (attack.m_character is Player player)
+        if (attack.GetCharacter() is Player player)
         {
             return ResolvePlayerAimDirection(player, spawnPoint, fallbackAimDirection, maxTravelDistance);
         }
@@ -193,7 +193,7 @@ internal static partial class ShieldRuntimeSystem
             return fallbackAimDirection.normalized;
         }
 
-        return SecondaryAttackManager.GetSentinelForward(attack.m_character);
+        return SecondaryAttackManager.GetSentinelForward(attack.GetCharacter());
     }
 
     internal static Vector3 ResolvePlayerAimDirection(Player player, Vector3 spawnPoint, Vector3 fallbackAimDirection, float maxTravelDistance)
@@ -487,12 +487,12 @@ internal static partial class ShieldRuntimeSystem
     private static bool TryConsumeShieldForThrow(Attack attack, out ItemDrop.ItemData thrownShield)
     {
         thrownShield = null!;
-        if (attack.m_character is not Player player || attack.m_weapon == null || attack.m_weapon.m_dropPrefab == null)
+        if (attack.GetCharacter() is not Player player || attack.GetWeapon() == null || attack.GetWeapon().m_dropPrefab == null)
         {
             return false;
         }
 
-        ItemDrop.ItemData equippedShield = attack.m_weapon;
+        ItemDrop.ItemData equippedShield = attack.GetWeapon();
         bool wasEquipped = equippedShield.m_equipped;
         thrownShield = equippedShield.Clone();
         thrownShield.m_stack = 1;
@@ -547,7 +547,7 @@ internal static partial class ShieldRuntimeSystem
 
             if (direction.sqrMagnitude < 0.001f)
             {
-                direction = SecondaryAttackManager.GetSentinelForward(attack.m_character);
+                direction = SecondaryAttackManager.GetSentinelForward(attack.GetCharacter());
             }
 
             direction.Normalize();
@@ -575,14 +575,14 @@ internal static partial class ShieldRuntimeSystem
             }
 
             projectile.m_adrenaline = 0f;
-            projectileInterface.Setup(attack.m_character, direction * speed, launchData.AttackHitNoise, hitData, thrownShield, null);
+            projectileInterface.Setup(attack.GetCharacter(), direction * speed, launchData.AttackHitNoise, hitData, thrownShield, null);
             projectile.m_adrenaline = 0f;
 
-            IgnoreShieldProjectileOwnerCollisions(projectileObject, attack.m_character);
+            IgnoreShieldProjectileOwnerCollisions(projectileObject, attack.GetCharacter());
 
             ApplyShieldProjectileVisual(projectile, thrownShield);
 
-            attack.m_weapon.m_lastProjectile = projectileObject;
+            attack.GetWeapon().m_lastProjectile = projectileObject;
             ShieldProjectileController controller = projectileObject.AddComponent<ShieldProjectileController>();
             controller.Initialize(attack, projectile, thrownShield, remainingChains, searchRadius, speed, ttl, damageDecay, hitTargets, returningToOwner);
 
@@ -590,9 +590,9 @@ internal static partial class ShieldRuntimeSystem
         }
         catch (Exception exception)
         {
-            if (attack.m_weapon.m_lastProjectile == projectileObject)
+            if (attack.GetWeapon().m_lastProjectile == projectileObject)
             {
-                attack.m_weapon.m_lastProjectile = null;
+                attack.GetWeapon().m_lastProjectile = null;
             }
 
             if (projectileObject != null)
@@ -640,6 +640,9 @@ internal static partial class ShieldRuntimeSystem
         MarkShieldProjectile(projectile);
         RemoveShieldProjectileArrowHitSfx(projectile);
         projectile.m_respawnItemOnHit = false;
+        // 1.0 templates can damage during flight, outside our OnHit interception.
+        // ShieldProjectileController alone owns shield hit/chain/deduplication policy.
+        projectile.m_hitMidFlight = false;
         projectile.m_spawnOnHit = null;
         projectile.m_spawnOnHitChance = 0f;
         projectile.m_spawnItem = null;
@@ -678,7 +681,7 @@ internal static partial class ShieldRuntimeSystem
             return;
         }
 
-        if (projectile.m_changedVisual)
+        if (GameAccess.ChangedVisual(projectile))
         {
             return;
         }
@@ -772,7 +775,7 @@ internal static partial class ShieldRuntimeSystem
         if (projectile.m_canChangeVisuals && projectile.m_visual != null && nviewValid)
         {
             nview!.GetZDO().Set(ZDOVars.s_visual, thrownShield.m_dropPrefab.name);
-            projectile.UpdateVisual();
+            GameAccess.UpdateVisual(projectile);
             ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
             return;
         }
@@ -821,7 +824,7 @@ internal static partial class ShieldRuntimeSystem
             previousVisual.SetActive(false);
         }
 
-        visual.GetComponentInChildren<IEquipmentVisual>()?.Setup(thrownShield.m_variant);
+        GameAccess.SetupEquipmentVisual(visual, thrownShield.m_variant);
         projectile.m_visual = visual;
 
         ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
@@ -965,7 +968,7 @@ internal static partial class ShieldRuntimeSystem
             bool returningToOwner)
         {
             _attack = attack;
-            _owner = attack.m_character;
+            _owner = attack.GetCharacter();
             _projectile = projectile;
             _thrownShield = thrownShield;
             _remainingChains = Mathf.Max(0, remainingChains);
@@ -1076,7 +1079,7 @@ internal static partial class ShieldRuntimeSystem
                 return;
             }
 
-            Character? owner = _attack?.m_character;
+            Character? owner = _attack?.GetCharacter();
             if (hitTarget == null && owner != null && TryStartReturnToOwner(hitPoint, normal))
             {
                 return;
@@ -1151,7 +1154,7 @@ internal static partial class ShieldRuntimeSystem
 
         private bool ApplyProjectileDamage(Collider collider, Vector3 hitPoint, bool water, Vector3 normal)
         {
-            if (water || collider == null || _projectile == null || _attack?.m_character == null)
+            if (water || collider == null || _projectile == null || _attack?.GetCharacter() == null)
             {
                 return false;
             }
@@ -1206,7 +1209,7 @@ internal static partial class ShieldRuntimeSystem
             hitData.m_point = hitPoint;
             hitData.m_dir = ResolveProjectileHitDirection(hitPoint, normal);
             hitData.m_hitCollider = collider;
-            hitData.SetAttacker(_attack.m_character);
+            hitData.SetAttacker(_attack.GetCharacter());
             using (ShieldWarfareHitContext.Begin(_attack))
             {
                 destructible.Damage(hitData);
@@ -1250,19 +1253,19 @@ internal static partial class ShieldRuntimeSystem
                 m_skillRaiseAmount = 0f
             };
 
-            if (_attack?.m_weapon != null)
+            if (_attack?.GetWeapon() != null)
             {
-                hitData.m_toolTier = (short)_attack.m_weapon.m_shared.m_toolTier;
-                hitData.m_skill = _attack.m_weapon.m_shared.m_skillType;
-                hitData.m_skillLevel = _attack.m_character.GetSkillLevel(_attack.m_weapon.m_shared.m_skillType);
-                hitData.m_itemLevel = (short)_attack.m_weapon.m_quality;
-                hitData.m_itemWorldLevel = (byte)_attack.m_weapon.m_worldLevel;
+                hitData.m_toolTier = (short)_attack.GetWeapon().m_shared.m_toolTier;
+                hitData.m_skill = _attack.GetWeapon().m_shared.m_skillType;
+                hitData.m_skillLevel = _attack.GetCharacter().GetSkillLevel(_attack.GetWeapon().m_shared.m_skillType);
+                hitData.m_itemLevel = (short)_attack.GetWeapon().m_quality;
+                hitData.m_itemWorldLevel = (byte)_attack.GetWeapon().m_worldLevel;
             }
 
-            if (_attack?.m_character != null)
+            if (_attack?.GetCharacter() != null)
             {
-                hitData.SetAttacker(_attack.m_character);
-                hitData.m_hitType = _attack.m_character is Player ? HitData.HitType.PlayerHit : HitData.HitType.EnemyHit;
+                hitData.SetAttacker(_attack.GetCharacter());
+                hitData.m_hitType = _attack.GetCharacter() is Player ? HitData.HitType.PlayerHit : HitData.HitType.EnemyHit;
             }
 
             return hitData;
@@ -1292,13 +1295,13 @@ internal static partial class ShieldRuntimeSystem
         {
             if (_skillRaised ||
                 hitData.m_skillRaiseAmount <= 0f ||
-                _attack?.m_character == null ||
-                _attack.m_weapon == null)
+                _attack?.GetCharacter() == null ||
+                _attack.GetWeapon() == null)
             {
                 return;
             }
 
-            _attack.m_character.RaiseSkill(_attack.m_weapon.m_shared.m_skillType, hitData.m_skillRaiseAmount);
+            _attack.GetCharacter().RaiseSkill(_attack.GetWeapon().m_shared.m_skillType, hitData.m_skillRaiseAmount);
             _skillRaised = true;
         }
 
@@ -1316,7 +1319,7 @@ internal static partial class ShieldRuntimeSystem
 
         private bool TryStartReturnToOwner(Vector3 hitPoint, Vector3 normal)
         {
-            if (_attack?.m_character is not Humanoid owner || owner.IsDead() || _thrownShield == null)
+            if (_attack?.GetCharacter() is not Humanoid owner || owner.IsDead() || _thrownShield == null)
             {
                 return false;
             }

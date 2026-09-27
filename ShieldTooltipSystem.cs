@@ -7,7 +7,7 @@ internal static class ShieldTooltipSystem
     internal static void AppendShieldGuidance(ItemDrop.ItemData? item, ref string tooltip)
     {
         if (CaptainValheimPlugin.Settings.General.ShowShieldTooltip.Value != CaptainValheimPlugin.Toggle.On ||
-            !HasEnabledShieldAttack(item))
+            !HasEnabledShieldFeature(item))
         {
             return;
         }
@@ -20,7 +20,7 @@ internal static class ShieldTooltipSystem
             : $"{tooltip}\n\n{guidance}";
     }
 
-    private static bool HasEnabledShieldAttack(ItemDrop.ItemData? item)
+    private static bool HasEnabledShieldFeature(ItemDrop.ItemData? item)
     {
         if (item?.m_shared?.m_itemType != ItemDrop.ItemData.ItemType.Shield ||
             !ShieldRuntimeSystem.TryGetDefinition(item, out SecondaryAttackDefinition definition))
@@ -29,7 +29,8 @@ internal static class ShieldTooltipSystem
         }
 
         ShieldSpecialSecondaryBehavior? behavior = definition.ShieldSpecial;
-        return behavior is
+        return definition.ShieldProjectileReflect || definition.ShieldBlockCharge ||
+               behavior is
                {
                    HasShieldPrimaryAttack: true
                } ||
@@ -52,7 +53,8 @@ internal static class ShieldTooltipSystem
     typeof(int),
     typeof(bool),
     typeof(float),
-    typeof(int))]
+    typeof(int),
+    typeof(bool))]
 internal static class ItemDataGetTooltipShieldGuidancePatch
 {
     private static void Postfix(ItemDrop.ItemData item, ref string __result)

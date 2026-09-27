@@ -50,7 +50,7 @@ internal static class ShieldOnlyKeyHintSystem
 
         if (_showingHints && _hasLastHintState && _lastHintState.Equals(state))
         {
-            PrepareCombatHintGroup(hints);
+            PrepareCombatHintGroup(hints, state.PreserveWeaponHints);
             return;
         }
 
@@ -61,7 +61,7 @@ internal static class ShieldOnlyKeyHintSystem
             return;
         }
 
-        PrepareCombatHintGroup(hints);
+        PrepareCombatHintGroup(hints, state.PreserveWeaponHints);
         for (int index = 0; index < HintCells.Count; index++)
         {
             KeyHintCell cell = HintCells[index];
@@ -83,22 +83,26 @@ internal static class ShieldOnlyKeyHintSystem
     private static bool TryBuildHintState(Player player, out ShieldHintState state)
     {
         state = ShieldHintState.Hidden;
-        ItemDrop.ItemData? leftItem = player.GetLeftItem();
-        ItemDrop.ItemData? rightItem = player.GetRightItem();
-        if (rightItem != null ||
-            leftItem?.m_shared?.m_itemType != ItemDrop.ItemData.ItemType.Shield ||
+        ItemDrop.ItemData? leftItem = player.LeftItem;
+        ItemDrop.ItemData? rightItem = player.RightItem;
+        if (leftItem?.m_shared?.m_itemType != ItemDrop.ItemData.ItemType.Shield ||
             !ShieldRuntimeSystem.TryGetDefinition(leftItem, out SecondaryAttackDefinition definition) ||
             definition.ShieldSpecial is not { } shieldBehavior)
         {
             return false;
         }
 
+        bool shieldOnly = rightItem == null;
+        bool hasCharge = shieldBehavior.HasShieldCharge && shieldBehavior.ShieldChargeDistance > 0f &&
+                         ShieldRuntimeSystem.IsShieldFeatureAllowed(
+                             player, leftItem, CaptainValheimPlugin.Settings.WeaponCompatibility.AllowCharge.Value);
         state = new ShieldHintState(
             Localization.instance?.GetSelectedLanguage() ?? "",
             ZInput.IsGamepadActive(),
-            shieldBehavior.HasShieldCharge && shieldBehavior.ShieldChargeDistance > 0f,
-            shieldBehavior.HasShieldPrimaryAttack,
-            shieldBehavior.HasShieldThrow,
+            preserveWeaponHints: !shieldOnly,
+            hasCharge,
+            shieldOnly && shieldBehavior.HasShieldPrimaryAttack,
+            shieldOnly && shieldBehavior.HasShieldThrow,
             ResolveButtonLabel("Attack"),
             ResolveButtonLabel("Block"),
             ResolveButtonLabel("SecondaryAttack"));
@@ -134,7 +138,7 @@ internal static class ShieldOnlyKeyHintSystem
     {
         return player != null &&
                !player.IsDead() &&
-               hints.m_keyHintsEnabled &&
+               GameAccess.KeyHintsEnabled(hints) &&
                !player.InPlaceMode() &&
                !Hud.IsPieceSelectionVisible() &&
                !Hud.InRadial() &&
@@ -151,11 +155,18 @@ internal static class ShieldOnlyKeyHintSystem
                player.GetDoodadController() == null;
     }
 
-    private static void PrepareCombatHintGroup(KeyHints hints)
+    private static void PrepareCombatHintGroup(KeyHints hints, bool preserveWeaponHints)
     {
         if (hints.m_combatHints != null)
         {
             hints.m_combatHints.SetActive(true);
+        }
+
+        // UpdateHints has already selected the weapon's primary/secondary hints.
+        // Mixed equipment adds the charge chord without replacing those weapon controls.
+        if (preserveWeaponHints)
+        {
+            return;
         }
 
         SetVanillaCombatHintActive(hints.m_bowDrawGP, false);
@@ -337,6 +348,7 @@ internal static class ShieldOnlyKeyHintSystem
     private readonly struct ShieldHintState(
         string language,
         bool gamepad,
+        bool preserveWeaponHints,
         bool hasCharge,
         bool hasPrimaryAttack,
         bool hasThrow,
@@ -345,10 +357,11 @@ internal static class ShieldOnlyKeyHintSystem
         string secondaryAttackKey)
     {
         internal static readonly ShieldHintState Hidden =
-            new("", false, false, false, false, "", "", "");
+            new("", false, false, false, false, false, "", "", "");
 
         private readonly string _language = language;
         private readonly bool _gamepad = gamepad;
+        internal readonly bool PreserveWeaponHints = preserveWeaponHints;
         internal readonly bool HasCharge = hasCharge;
         internal readonly bool HasPrimaryAttack = hasPrimaryAttack;
         internal readonly bool HasThrow = hasThrow;
@@ -361,6 +374,7 @@ internal static class ShieldOnlyKeyHintSystem
         internal bool Equals(ShieldHintState other)
         {
             return _gamepad == other._gamepad &&
+                   PreserveWeaponHints == other.PreserveWeaponHints &&
                    HasCharge == other.HasCharge &&
                    HasPrimaryAttack == other.HasPrimaryAttack &&
                    HasThrow == other.HasThrow &&

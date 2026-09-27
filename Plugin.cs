@@ -12,7 +12,7 @@ namespace CaptainValheim;
 public class CaptainValheimPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CaptainValheim";
-    internal const string ModVersion = "1.0.9";
+    internal const string ModVersion = "1.0.11";
     internal const string Author = "sighsorry";
     private const string ModGUID = $"{Author}.{ModName}";
     private static string ConfigFileName = $"{ModGUID}.cfg";
@@ -192,10 +192,30 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     internal sealed class PluginSettings
     {
         internal GeneralSettings General { get; } = new();
+        internal WeaponCompatibilitySettings WeaponCompatibility { get; } = new();
 
         internal void Bind(CaptainValheimPlugin plugin)
         {
             General.Bind(plugin);
+            WeaponCompatibility.Bind(plugin);
+        }
+    }
+
+    internal sealed class WeaponCompatibilitySettings
+    {
+        internal ConfigEntry<Toggle> AllowCharge = null!;
+        internal ConfigEntry<Toggle> AllowBlockCharge = null!;
+        internal ConfigEntry<Toggle> AllowReflection = null!;
+
+        internal void Bind(CaptainValheimPlugin plugin)
+        {
+            const string group = "2 - Shield Actions With One-Handed Weapon";
+            AllowCharge = plugin.config(group, "Allow Shield Charge With One-Handed Weapon", Toggle.Off,
+                "Allows Block + Secondary Attack to use shield charge while holding a one-handed melee weapon. Failed charges do not fall back to a weapon attack. The shield's YAML charge settings still apply.");
+            AllowBlockCharge = plugin.config(group, "Allow Block Charge With One-Handed Weapon", Toggle.On,
+                "Allows shield block-charge accumulation and counterattacks while holding a one-handed melee weapon. If off, these require an empty right hand, and entering disallowed equipment clears stored charges. The shield's YAML blockCharge settings still apply.");
+            AllowReflection = plugin.config(group, "Allow Projectile Reflection With One-Handed Weapon", Toggle.On,
+                "Allows shield projectile reflection while holding a one-handed melee weapon. If off, reflection requires an empty right hand. The shield's YAML reflect settings still apply.");
         }
     }
 

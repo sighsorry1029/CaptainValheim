@@ -15,13 +15,13 @@ internal static class ShieldWarfareHitContext
 
     internal static Scope Begin(Attack attack)
     {
-        if (attack?.m_character != Player.m_localPlayer ||
-            attack.m_weapon?.m_dropPrefab == null)
+        if (attack?.GetCharacter() != Player.m_localPlayer ||
+            attack.GetWeapon()?.m_dropPrefab == null)
         {
             return default;
         }
 
-        string prefabName = attack.m_weapon.m_dropPrefab.name;
+        string prefabName = attack.GetWeapon().m_dropPrefab.name;
         if (string.IsNullOrWhiteSpace(prefabName))
         {
             return default;

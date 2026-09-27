@@ -479,7 +479,7 @@ internal static class SecondaryAttackFacade
             return true;
         }
 
-        if (((Humanoid)localPlayer).m_currentAttack != null)
+        if (GameAccess.CurrentAttack(localPlayer) != null)
         {
             return false;
         }

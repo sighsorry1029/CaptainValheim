@@ -1,6 +1,6 @@
 # Shield Specials
 
-This document describes the current shield-only behavior in `CaptainValheim`.
+This document describes shield techniques and their equipment rules in `CaptainValheim`.
 
 Relevant files:
 
@@ -75,17 +75,30 @@ Configured shield features apply when:
 - the shield prefab either has a shield entry in `CaptainValheim.yml` or is picking up `Global`/built-in shield defaults
 - omitted `primaryAttack`, `throw`, or `charge` blocks keep the inherited `Global`/built-in values
 - `enabled: false` on a shield feature block disables that feature after inheritance
-- `primaryAttack`, `throw`, and `charge` require an empty right hand
+- `primaryAttack` and `throw` require an empty right hand
 - `charge` also requires a positive `distance`; zero or negative distance leaves the charge unavailable
-- `reflect` and `blockCharge` can also work while a right-hand weapon is equipped
+- `charge`, `reflect`, and `blockCharge` allow an empty right hand, or a one-handed melee weapon when the corresponding ServerSync option permits it
 - Shield throw has no cooldown, status effect, or cooldown HUD entry; it is limited by stamina, durability, projectile travel, and shield return/re-equip time.
 - `throw.targets` is the maximum number of valid enemy targets hit, including the first enemy hit. Terrain and wall bounces do not spend targets.
 - `throw.damageDecay` reduces damage after each enemy target hit as `nextDamage *= (1 - damageDecay)`.
 - `blockCharge.enabled: true` enables Valheim's vanilla block-charge counterattack while keeping the prefab's own vanilla count and decay values; inherited `Global`/built-in shield defaults do the same
 
+### One-Handed Weapon Options
+
+The following settings are in the BepInEx config section `2 - Shield Actions With One-Handed Weapon`, are synchronized by ServerSync, and follow the server's configuration lock:
+
+| Setting | Default |
+| --- | --- |
+| `Allow Shield Charge With One-Handed Weapon` | `Off` |
+| `Allow Block Charge With One-Handed Weapon` | `On` |
+| `Allow Projectile Reflection With One-Handed Weapon` | `On` |
+
+Each option grants permission to use its feature with a one-handed melee weapon in the right hand and an actual equipped shield in the left hand. It does not override YAML `enabled: false`. `Off` still allows that feature with an empty right hand. Other right-hand items, including bows, two-handed weapons, torches, and tools, do not qualify. The weapon's damage is not added to shield techniques.
+
 ### Primary Attack
 
 - Input: primary attack
+- Requires an empty right hand
 - Uses the native unarmed combo from the cloned unarmed primary attack template
 - Uses a compact impact sphere for hit detection, while damage and push use the shield `primaryAttack` formula
 - Uses `Blocking` skill for skill gain
@@ -94,6 +107,7 @@ Configured shield features apply when:
 
 - Input: secondary attack
 - Used when the player is not currently blocking
+- Requires an empty right hand
 - Unequips and removes the shield from the inventory, throws it, chains to nearby targets, then returns it to the inventory and re-equips it
 - Drops the shield back into the world when it cannot be returned to the inventory, including when the inventory is full
 
@@ -101,6 +115,9 @@ Configured shield features apply when:
 
 - Input: secondary attack
 - Used when the player is currently blocking
+- With a one-handed melee weapon, requires `Allow Shield Charge With One-Handed Weapon = On`
+- When enabled for the equipped shield and weapon, Block + Secondary Attack belongs to charge; a failed charge attempt does not fall through to a weapon attack
+- Without Block, the right-hand weapon retains its normal secondary attack
 - Stops on the first valid character or environment impact
 - Deals one impact pulse at the stop point
 
@@ -108,12 +125,15 @@ Configured shield features apply when:
 
 - While guarding, blockable projectiles can be reflected toward the current aim point
 - Reflection can exist with or without `primaryAttack`, `throw`, or `charge`
+- With a one-handed melee weapon, requires `Allow Projectile Reflection With One-Handed Weapon = On`
 
 ### Block Charge
 
 - Enables Valheim's vanilla block-charge counterattack by setting the shield prefab's `m_buildBlockCharges`
 - Optional `chargeCount`, `decayTime`, and `blockingDecayFactor` override the prefab's vanilla values
 - Omitting those fields keeps the original prefab values, such as ordinary shields/bucklers `3 / 1.0 / 0.25` and tower shields `5 / 4.0 / 0.5`
+- With a one-handed melee weapon, both charge accumulation and release require `Allow Block Charge With One-Handed Weapon = On`
+- Stored charges are cleared when the equipped items no longer permit this feature or the feature is disabled, so charges cannot be carried into a disallowed equipment state
 
 ## Formulas
 
@@ -269,4 +289,3 @@ Throw ricochet damage decay is per bounce, not per simultaneous target.
 - `throw.animation` overrides the attack animation used when the throw starts; omitted values inherit `Global` or the built-in `battleaxe_attack1`.
 - `primaryAttack` and `charge` do not expose animation config fields.
 - Reflected projectile power can scale with `deflection force`, which gives high-force tower shields a natural reflect advantage.
-

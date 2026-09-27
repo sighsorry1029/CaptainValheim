@@ -33,6 +33,7 @@ Projectile Reflection rewards accurate blocking by letting guarded projectile hi
 - Scales damage, push, stamina, and durability from the shield's actual stats instead of using one flat value for every shield.
 - Provides a global fallback so unlisted shields work immediately, while individual prefab overrides can tune special cases.
 - Syncs config through ServerSync for dedicated servers.
+- Lets servers independently allow Shield Charge, Block Charge, and Projectile Reflection with a one-handed melee weapon and a shield.
 - Adds a WarfareTweaks bridge so Warfare effects can recognize CaptainValheim shield hit contexts.
 - Keeps the mod focused on shields only, with no ranged, melee, or Blood Magic preset schema mixed in.
 
@@ -52,6 +53,18 @@ CaptainValheim creates:
 - `BepInEx/config/CaptainValheim.yml`
 
 `Show Shield Tooltip` in the BepInEx config controls the extra CaptainValheim guidance appended to shield item tooltips. It defaults to `On` and is a client-only display setting that is not synchronized with the server.
+
+The `2 - Shield Actions With One-Handed Weapon` section contains three ServerSync settings. These follow the server's `Lock Configuration` setting:
+
+| Setting | Default | When enabled |
+| --- | --- | --- |
+| `Allow Shield Charge With One-Handed Weapon` | `Off` | Allows Block + Secondary Attack to charge while holding a one-handed melee weapon and a shield. |
+| `Allow Block Charge With One-Handed Weapon` | `On` | Allows blocking to build charges and release the counterattack with that equipment. |
+| `Allow Projectile Reflection With One-Handed Weapon` | `On` | Allows guarded projectile reflection with that equipment. |
+
+`Off` restricts that feature to an empty right hand. The shield must be equipped in the left hand, and the corresponding feature must also be enabled in `CaptainValheim.yml`. Bows, two-handed weapons, torches, and tools are not included. Shields still use their own damage and stamina settings; the right-hand weapon does not add its damage to shield techniques.
+
+When charge is allowed for the equipped shield and weapon, Block + Secondary Attack is reserved for shield charge. If a cooldown, stamina shortage, or another start condition prevents charging, the input does not fall through to the weapon's secondary attack. Without Block, the weapon's secondary attack remains available. Shield strikes and throws still require an empty right hand. Equipping an item that disallows block charge, or disabling block charge, clears any stored charges.
 
 The root `Global` block defines fallback behavior for all shields. Any shield prefab listed below `Global` inherits those defaults and only overrides the fields you write.
 
@@ -92,7 +105,7 @@ Save translation files as UTF-8, then restart Valheim or reselect the language a
 
 ## Building
 
-Build against a local Valheim installation with BepInEx and the publicized game assemblies configured in `environment.props`.
+Build against a local Valheim installation with BepInEx and the original game assemblies configured in `environment.props`. Private game members used by the mod are accessed explicitly through cached Harmony accessors.
 
 For normal development, build Debug and automatically copy the final merged plugin DLL into the configured Valheim plugins folder:
 

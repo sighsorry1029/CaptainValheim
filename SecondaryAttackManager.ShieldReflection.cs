@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace CaptainValheim;
@@ -60,7 +61,9 @@ internal sealed class CaptainValheimCharacterRpc : MonoBehaviour
 
 internal static partial class SecondaryAttackManager
 {
-    internal const int ShieldReflectProtocolVersion = 2;
+    // v3 carries Valheim 1.0's non-player damage channel and status-effect variant. The versioned
+    // RPC name and exact advertisement check keep older peers on vanilla damage delivery.
+    internal const int ShieldReflectProtocolVersion = 3;
     private const string ShieldReflectProtocolZdoKey = "CaptainValheim_ShieldReflectProtocol";
     private const int ShieldReflectDeliveredEventLimit = 512;
 
@@ -69,6 +72,60 @@ internal static partial class SecondaryAttackManager
     private static readonly List<ShieldReflectDamageScope> ActiveShieldReflectDamageScopes = new(2);
     private static readonly List<BlockAttackContext> ActiveShieldReflectBlockAttackContexts = new(2);
     private static long NextShieldReflectEventId;
+    private static readonly ConditionalWeakTable<Humanoid, ShieldBlockChargePolicyState> ShieldBlockChargePolicyStates = new();
+
+    private sealed class ShieldBlockChargePolicyState
+    {
+        internal bool ShieldWasEquipped;
+    }
+
+    internal static bool ShouldBuildShieldBlockCharges(bool vanillaEnabled, Humanoid humanoid)
+    {
+        if (humanoid is not Player || humanoid.LeftItem?.m_shared?.m_itemType != ItemDrop.ItemData.ItemType.Shield)
+        {
+            return vanillaEnabled;
+        }
+
+        RefreshShieldBlockChargePolicy(humanoid);
+        return vanillaEnabled &&
+            ShieldRuntimeSystem.TryGetDefinition(humanoid.LeftItem, out SecondaryAttackDefinition definition) &&
+            definition.ShieldBlockCharge && ShieldRuntimeSystem.IsShieldFeatureAllowed(
+            humanoid,
+            humanoid.LeftItem,
+            CaptainValheimPlugin.Settings.WeaponCompatibility.AllowBlockCharge.Value);
+    }
+
+    internal static void RefreshShieldBlockChargePolicy(Humanoid humanoid)
+    {
+        if (humanoid is not Player)
+        {
+            return;
+        }
+
+        ItemDrop.ItemData? shield = humanoid.LeftItem;
+        bool hasShield = shield?.m_shared?.m_itemType == ItemDrop.ItemData.ItemType.Shield;
+        if (!hasShield && !ShieldBlockChargePolicyStates.TryGetValue(humanoid, out _))
+        {
+            return;
+        }
+
+        ShieldBlockChargePolicyState state = ShieldBlockChargePolicyStates.GetValue(humanoid, _ => new ShieldBlockChargePolicyState());
+        bool clearCharges = hasShield
+            ? !ShieldRuntimeSystem.TryGetDefinition(shield!, out SecondaryAttackDefinition definition) ||
+              !definition.ShieldBlockCharge || !ShieldRuntimeSystem.IsShieldFeatureAllowed(
+                humanoid,
+                shield,
+                CaptainValheimPlugin.Settings.WeaponCompatibility.AllowBlockCharge.Value)
+            : state.ShieldWasEquipped;
+        state.ShieldWasEquipped = hasShield;
+        if (clearCharges)
+        {
+            // These are per-humanoid counters; equipment/config changes never alter the
+            // shield's shared definition or another player's accumulation.
+            GameAccess.BlockCharges(humanoid) = 0;
+            GameAccess.BlockChargeRemoveTimer(humanoid) = 0f;
+        }
+    }
 
     internal sealed class BlockAttackContext
     {
@@ -201,7 +258,7 @@ internal static partial class SecondaryAttackManager
             normal = velocity.sqrMagnitude > 0.001f ? -velocity.normalized : -targetPlayer.GetLookDir();
         }
 
-        hit.m_weakSpot = targetPlayer.FindWeakSpotIndex(hit.m_hitCollider);
+        hit.m_weakSpot = GameAccess.FindWeakSpotIndex(targetPlayer, hit.m_hitCollider);
         ShieldReflectProjectileContext snapshot = ShieldReflectProjectileContext.FromProjectile(
             projectile,
             hit.m_point,
@@ -214,6 +271,14 @@ internal static partial class SecondaryAttackManager
 
         if (targetNView!.IsOwner())
         {
+            if (!ShieldRuntimeSystem.IsShieldFeatureAllowed(
+                    targetPlayer,
+                    targetPlayer.LeftItem,
+                    CaptainValheimPlugin.Settings.WeaponCompatibility.AllowReflection.Value))
+            {
+                return false;
+            }
+
             ShieldReflectDamageScope scope = new(
                 targetPlayer,
                 targetZdo.m_uid,
@@ -299,7 +364,13 @@ internal static partial class SecondaryAttackManager
             senderOwnsLiveProjectile = liveOwner == 0L || liveOwner == sender;
         }
 
-        bool reflectionEnabled = senderOwnsLiveProjectile && envelope.ProjectileContext.IsValid;
+        // The owner must still receive ordinary damage if its equipment or server
+        // policy changed while this envelope was in transit.
+        bool reflectionEnabled = senderOwnsLiveProjectile && envelope.ProjectileContext.IsValid &&
+                                 ShieldRuntimeSystem.IsShieldFeatureAllowed(
+                                     player,
+                                     player.LeftItem,
+                                     CaptainValheimPlugin.Settings.WeaponCompatibility.AllowReflection.Value);
         ShieldReflectDamageScope scope = new(
             player,
             envelope.TargetId,
@@ -328,6 +399,14 @@ internal static partial class SecondaryAttackManager
         ItemDrop.ItemData blocker)
     {
         if (humanoid is not Player player || blocker == null || hit == null)
+        {
+            return null;
+        }
+
+        if (!ShieldRuntimeSystem.IsShieldFeatureAllowed(
+                player,
+                blocker,
+                CaptainValheimPlugin.Settings.WeaponCompatibility.AllowReflection.Value))
         {
             return null;
         }
@@ -482,7 +561,11 @@ internal static partial class SecondaryAttackManager
         if (!projectileContext.IsValid ||
             projectileContext.Water ||
             !projectileContext.Blockable ||
-            projectileContext.Reflected)
+            projectileContext.Reflected ||
+            !ShieldRuntimeSystem.IsShieldFeatureAllowed(
+                player,
+                blocker,
+                CaptainValheimPlugin.Settings.WeaponCompatibility.AllowReflection.Value))
         {
             return;
         }
@@ -607,6 +690,7 @@ internal static partial class SecondaryAttackManager
         hitData.m_pushForce = projectileContext.AttackForce * powerMultiplier;
         hitData.m_backstabBonus = projectileContext.BackstabBonus;
         hitData.m_statusEffectHash = projectileContext.StatusEffectHash;
+        hitData.m_variant = projectileContext.HitVariant;
         hitData.m_skill = Skills.SkillType.Blocking;
         hitData.m_skillRaiseAmount = 0f;
         hitData.m_blockable = projectileContext.Blockable;
@@ -718,6 +802,7 @@ internal static partial class SecondaryAttackManager
             bool blockable,
             bool dodgeable,
             int statusEffectHash,
+            short hitVariant,
             ItemDrop.ItemData? ammo,
             bool reflected)
         {
@@ -734,6 +819,7 @@ internal static partial class SecondaryAttackManager
             Blockable = blockable;
             Dodgeable = dodgeable;
             StatusEffectHash = statusEffectHash;
+            HitVariant = hitVariant;
             Ammo = ammo;
             Reflected = reflected;
         }
@@ -763,6 +849,8 @@ internal static partial class SecondaryAttackManager
         public bool Dodgeable { get; }
 
         public int StatusEffectHash { get; }
+
+        public short HitVariant { get; }
 
         public ItemDrop.ItemData? Ammo { get; }
 
@@ -799,6 +887,7 @@ internal static partial class SecondaryAttackManager
                 projectile.m_blockable,
                 projectile.m_dodgeable,
                 ProjectileAccess.GetStatusEffectHash(projectile),
+                projectile.m_hitVariant,
                 ProjectileAccess.GetAmmo(projectile),
                 ShieldRuntimeSystem.IsReflectedProjectile(projectile));
         }
@@ -817,6 +906,7 @@ internal static partial class SecondaryAttackManager
             package.Write(Blockable);
             package.Write(Dodgeable);
             package.Write(StatusEffectHash);
+            package.Write(HitVariant);
             package.Write(Reflected);
         }
 
@@ -836,6 +926,7 @@ internal static partial class SecondaryAttackManager
                 package.ReadBool(),
                 package.ReadBool(),
                 package.ReadInt(),
+                package.ReadShort(),
                 ammo: null,
                 package.ReadBool());
         }
@@ -862,7 +953,8 @@ internal static partial class SecondaryAttackManager
                    IsFinite(damage.m_frost) &&
                    IsFinite(damage.m_lightning) &&
                    IsFinite(damage.m_poison) &&
-                   IsFinite(damage.m_spirit);
+                   IsFinite(damage.m_spirit) &&
+                   IsFinite(damage.m_nonPlayer);
         }
     }
 
@@ -1042,6 +1134,7 @@ internal static partial class SecondaryAttackManager
         package.Write(damage.m_lightning);
         package.Write(damage.m_poison);
         package.Write(damage.m_spirit);
+        package.Write(damage.m_nonPlayer);
     }
 
     private static HitData.DamageTypes ReadDamage(ZPackage package)
@@ -1058,7 +1151,8 @@ internal static partial class SecondaryAttackManager
             m_frost = package.ReadSingle(),
             m_lightning = package.ReadSingle(),
             m_poison = package.ReadSingle(),
-            m_spirit = package.ReadSingle()
+            m_spirit = package.ReadSingle(),
+            m_nonPlayer = package.ReadSingle()
         };
     }
 }

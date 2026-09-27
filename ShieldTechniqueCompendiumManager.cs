@@ -48,14 +48,14 @@ internal static class ShieldTechniqueCompendiumManager
 
     internal static void AddTechniquePage(TextsDialog dialog)
     {
-        if (dialog?.m_texts == null)
+        if (dialog == null || GameAccess.Texts(dialog) == null)
         {
             return;
         }
 
         TrackDialog(dialog);
-        dialog.m_texts.RemoveAll(text => IsTechniquePage(text?.m_topic));
-        dialog.m_texts.Add(new TextsDialog.TextInfo(PageTopic, BuildPageText()));
+        GameAccess.Texts(dialog).RemoveAll(text => IsTechniquePage(text?.m_topic));
+        GameAccess.Texts(dialog).Add(new TextsDialog.TextInfo(PageTopic, BuildPageText()));
     }
 
     internal static void RefreshPageContentIcons(TextsDialog dialog, TextsDialog.TextInfo info)
@@ -130,7 +130,7 @@ internal static class ShieldTechniqueCompendiumManager
                 continue;
             }
 
-            dialog.m_texts?.RemoveAll(text => IsTechniquePage(text?.m_topic));
+            GameAccess.Texts(dialog)?.RemoveAll(text => IsTechniquePage(text?.m_topic));
             if (dialog.m_textArea == null)
             {
                 continue;
@@ -331,7 +331,7 @@ internal static class TextsDialogUpdateTextsListShieldTechniquePatch
     }
 }
 
-[HarmonyPatch(typeof(TextsDialog), nameof(TextsDialog.ShowText), new[] { typeof(TextsDialog.TextInfo) })]
+[HarmonyPatch(typeof(TextsDialog), "ShowText", new[] { typeof(TextsDialog.TextInfo) })]
 internal static class TextsDialogShowTextShieldTechniquePatch
 {
     private static void Postfix(TextsDialog __instance, TextsDialog.TextInfo text)

@@ -97,7 +97,7 @@ internal static class CaptainValheimLocalization
 
             foreach (KeyValuePair<string, string> entry in translations)
             {
-                localization.AddWord(entry.Key, entry.Value);
+                GameAccess.AddWord(localization, entry.Key, entry.Value);
             }
         }
         catch (Exception exception)

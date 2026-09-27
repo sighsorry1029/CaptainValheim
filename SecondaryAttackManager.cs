@@ -65,20 +65,20 @@ internal static partial class SecondaryAttackManager
     {
         DrainAttackDurability(attack, durabilityFactor);
 
-        Transform origin = attack.m_character.transform;
-        attack.m_weapon.m_shared.m_triggerEffect.Create(origin.position, attack.m_character.transform.rotation, origin);
-        attack.m_triggerEffect.Create(origin.position, attack.m_character.transform.rotation, origin);
-        attack.m_character.AddNoise(attack.m_attackHitNoise);
+        Transform origin = attack.GetCharacter().transform;
+        attack.GetWeapon().m_shared.m_triggerEffect.Create(origin.position, attack.GetCharacter().transform.rotation, origin);
+        attack.m_triggerEffect.Create(origin.position, attack.GetCharacter().transform.rotation, origin);
+        attack.GetCharacter().AddNoise(attack.m_attackHitNoise);
     }
 
     internal static void DrainAttackDurability(Attack attack, float durabilityFactor)
     {
-        if (attack?.m_weapon == null || attack.m_character == null)
+        if (attack?.GetWeapon() == null || attack.GetCharacter() == null)
         {
             return;
         }
 
-        DrainItemDurability(attack.m_character, attack.m_weapon, durabilityFactor);
+        DrainItemDurability(attack.GetCharacter(), attack.GetWeapon(), durabilityFactor);
     }
 
     internal static void DrainItemDurability(Character character, ItemDrop.ItemData weapon, float durabilityFactor)
@@ -108,10 +108,10 @@ internal static partial class SecondaryAttackManager
 
     internal static SecondaryAttackDurabilityAdjustmentState BeginSecondaryAttackDurabilityAdjustment(Attack attack)
     {
-        if (attack?.m_weapon?.m_shared == null ||
-            attack.m_character == null ||
-            !attack.m_weapon.m_shared.m_useDurability ||
-            !attack.m_character.IsPlayer() ||
+        if (attack?.GetWeapon()?.m_shared == null ||
+            attack.GetCharacter() == null ||
+            !attack.GetWeapon().m_shared.m_useDurability ||
+            !attack.GetCharacter().IsPlayer() ||
             !SecondaryAttackRuntimeContext.TryGetActiveAttack(attack, out ActiveSecondaryAttack? activeAttack) ||
             activeAttack == null)
         {
@@ -124,7 +124,7 @@ internal static partial class SecondaryAttackManager
             return SecondaryAttackDurabilityAdjustmentState.Empty;
         }
 
-        return new SecondaryAttackDurabilityAdjustmentState(attack.m_weapon, attack.m_weapon.m_durability, factor);
+        return new SecondaryAttackDurabilityAdjustmentState(attack.GetWeapon(), attack.GetWeapon().m_durability, factor);
     }
 
     internal static void EndSecondaryAttackDurabilityAdjustment(ref SecondaryAttackDurabilityAdjustmentState state)

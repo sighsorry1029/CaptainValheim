@@ -11,6 +11,103 @@ internal static partial class ShieldRuntimeSystem
 
     private static readonly ConditionalWeakTable<Projectile, ReflectedProjectileState> ReflectedProjectiles = new();
     private static readonly ConditionalWeakTable<Humanoid, ShieldStartOverrideState> ShieldStartOverrides = new();
+    private static readonly ConditionalWeakTable<Player, WeaponChargeInputState> WeaponChargeInputs = new();
+
+    internal static bool IsOneHandedMeleeWeapon(ItemDrop.ItemData? item)
+    {
+        Attack? primary = item?.m_shared?.m_attack;
+        return item?.m_shared?.m_itemType == ItemDrop.ItemData.ItemType.OneHandedWeapon &&
+               primary != null && !primary.m_bowDraw &&
+               primary.m_attackType is Attack.AttackType.Horizontal or Attack.AttackType.Vertical or Attack.AttackType.Area;
+    }
+
+    internal static bool IsShieldFeatureAllowed(
+        Humanoid humanoid, ItemDrop.ItemData? shield, CaptainValheimPlugin.Toggle allowWithWeapon)
+    {
+        return shield != null && ReferenceEquals(humanoid.LeftItem, shield) &&
+               IsShieldEquipmentAllowed(shield, humanoid.RightItem, allowWithWeapon);
+    }
+
+    internal static bool IsShieldEquipmentAllowed(
+        ItemDrop.ItemData? leftItem, ItemDrop.ItemData? rightItem, CaptainValheimPlugin.Toggle allowWithWeapon)
+    {
+        return leftItem?.m_shared?.m_itemType == ItemDrop.ItemData.ItemType.Shield &&
+               (rightItem == null ||
+                (allowWithWeapon == CaptainValheimPlugin.Toggle.On && IsOneHandedMeleeWeapon(rightItem)));
+    }
+
+    private static bool CanSelectWeaponCharge(Player player, out SecondaryAttackDefinition definition)
+    {
+        definition = null!;
+        return player.RightItem != null && GameAccess.BlockingInput(player) &&
+               IsShieldFeatureAllowed(player, player.LeftItem, CaptainValheimPlugin.Settings.WeaponCompatibility.AllowCharge.Value) &&
+               TryGetDefinition(player.LeftItem, out definition) &&
+               definition.ShieldSpecial is { HasShieldCharge: true, ShieldChargeDistance: > 0f };
+    }
+
+    // Observe the game's processed input, including toggle-block and gamepad controls.
+    // An input gesture keeps its original intent until release, even when equipment,
+    // block state or the server policy changes before the next physics update.
+    internal static void ObserveWeaponChargeInput(Player player)
+    {
+        if (player != Player.m_localPlayer)
+        {
+            return;
+        }
+
+        bool held = GameAccess.SecondaryAttackPressed(player) || GameAccess.SecondaryAttackHeld(player);
+        if (!WeaponChargeInputs.TryGetValue(player, out WeaponChargeInputState? state))
+        {
+            if (!held)
+            {
+                return;
+            }
+
+            state = new WeaponChargeInputState();
+            WeaponChargeInputs.Add(player, state);
+        }
+
+        bool clearQueue = state.Claimed && !held;
+        state.Observe(held, !state.Held && held && CanSelectWeaponCharge(player, out _));
+        if (clearQueue)
+        {
+            GameAccess.QueuedSecondaryAttack(player) = 0f;
+        }
+    }
+
+    internal sealed class WeaponChargeInputState
+    {
+        internal bool Held { get; private set; }
+        internal bool Claimed { get; private set; }
+        private bool _attempted;
+
+        internal void Observe(bool held, bool wantsCharge)
+        {
+            if (!held)
+            {
+                Held = false;
+                Claimed = false;
+                _attempted = false;
+            }
+            else if (!Held)
+            {
+                Held = true;
+                Claimed = wantsCharge;
+                _attempted = false;
+            }
+        }
+
+        internal bool TryBeginAttempt()
+        {
+            if (!Claimed || _attempted)
+            {
+                return false;
+            }
+
+            _attempted = true;
+            return true;
+        }
+    }
 
     internal static bool TryGetScopedCurrentWeaponOverride(Humanoid humanoid, out ItemDrop.ItemData weapon)
     {
@@ -42,6 +139,21 @@ internal static partial class ShieldRuntimeSystem
         ItemDrop.ItemData leftItem,
         ItemDrop.ItemData rightItem)
     {
+        if (secondaryAttack && humanoid is Player localPlayer && localPlayer == Player.m_localPlayer &&
+            WeaponChargeInputs.TryGetValue(localPlayer, out WeaponChargeInputState? input) && input.Claimed)
+        {
+            result = false;
+            if (input.TryBeginAttempt() && localPlayer.IsBlocking() &&
+                CanSelectWeaponCharge(localPlayer, out SecondaryAttackDefinition chargeDefinition) &&
+                CanStartShieldCharge(localPlayer))
+            {
+                result = TryStartShieldChargeDirect(localPlayer, localPlayer.LeftItem, chargeDefinition);
+            }
+
+            // Consume a failed or held charge too; never route this gesture to the weapon.
+            return false;
+        }
+
         if (IsShieldChargeActive(humanoid))
         {
             result = false;
@@ -162,9 +274,9 @@ internal static partial class ShieldRuntimeSystem
         }
 
         state.Restore();
-        if (startedAttack && humanoid.m_currentAttack != null)
+        if (startedAttack && GameAccess.CurrentAttack(humanoid) != null)
         {
-            RegisterActiveAttack(humanoid.m_currentAttack, state.Definition, state.Mode);
+            RegisterActiveAttack(GameAccess.CurrentAttack(humanoid), state.Definition, state.Mode);
         }
 
         ShieldStartOverrides.Remove(humanoid);
@@ -252,7 +364,7 @@ internal static partial class ShieldRuntimeSystem
             return false;
         }
 
-        if (attack.m_character.IsStaggering())
+        if (attack.GetCharacter().IsStaggering())
         {
             return true;
         }
@@ -303,7 +415,7 @@ internal static partial class ShieldRuntimeSystem
         out ShieldPrimaryTriggerState state)
     {
         state = default;
-        if (attack?.m_weapon?.m_shared == null ||
+        if (attack?.GetWeapon()?.m_shared == null ||
             activeAttack?.Definition?.ShieldSpecial is not { } behavior ||
             !behavior.HasShieldPrimaryAttack)
         {
@@ -313,17 +425,17 @@ internal static partial class ShieldRuntimeSystem
         activeAttack.Triggered = true;
         float expectedSkillFactor = ResolveExpectedVanillaShieldPrimarySkillFactor(attack);
         float baseDamage = Mathf.Max(0f, GetShieldBlockPower(attack) * behavior.ShieldPrimaryAttackDamageFactor);
-        float basePush = Mathf.Max(0f, attack.m_weapon.GetDeflectionForce() * behavior.ShieldPrimaryAttackPushFactor);
+        float basePush = Mathf.Max(0f, attack.GetWeapon().GetDeflectionForce() * behavior.ShieldPrimaryAttackPushFactor);
         if (expectedSkillFactor > 0.001f)
         {
             baseDamage /= expectedSkillFactor;
             basePush /= expectedSkillFactor;
         }
 
-        EffectList? hitEffectFallback = !HasEffect(attack.m_weapon.m_shared.m_hitEffect) && !HasEffect(attack.m_hitEffect)
+        EffectList? hitEffectFallback = !HasEffect(attack.GetWeapon().m_shared.m_hitEffect) && !HasEffect(attack.m_hitEffect)
             ? ResolveShieldHitEffectFallback(attack)
             : null;
-        state = new ShieldPrimaryTriggerState(attack.m_weapon.m_shared, hitEffectFallback);
+        state = new ShieldPrimaryTriggerState(attack.GetWeapon().m_shared, hitEffectFallback);
         state.Apply(baseDamage, basePush);
     }
 
@@ -334,18 +446,18 @@ internal static partial class ShieldRuntimeSystem
 
     private static float ResolveExpectedVanillaShieldPrimarySkillFactor(Attack attack)
     {
-        if (attack?.m_character == null || attack.m_weapon?.m_shared == null)
+        if (attack?.GetCharacter() == null || attack.GetWeapon()?.m_shared == null)
         {
             return 1f;
         }
 
-        float skillFactor = Mathf.Clamp01(attack.m_character.GetSkillFactor(attack.m_weapon.m_shared.m_skillType));
+        float skillFactor = Mathf.Clamp01(attack.GetCharacter().GetSkillFactor(attack.GetWeapon().m_shared.m_skillType));
         return Mathf.Lerp(0.4f, 1f, skillFactor);
     }
 
     private static void CreateShieldHitEffects(Attack attack, Vector3 point, Quaternion rotation)
     {
-        bool created = CreateEffectIfAvailable(attack?.m_weapon?.m_shared?.m_hitEffect, point, rotation);
+        bool created = CreateEffectIfAvailable(attack?.GetWeapon()?.m_shared?.m_hitEffect, point, rotation);
         created |= CreateEffectIfAvailable(attack?.m_hitEffect, point, rotation);
         if (!created)
         {
@@ -355,14 +467,14 @@ internal static partial class ShieldRuntimeSystem
 
     private static EffectList? ResolveShieldHitEffectFallback(Attack? attack)
     {
-        EffectList? blockEffect = attack?.m_weapon?.m_shared?.m_blockEffect;
+        EffectList? blockEffect = attack?.GetWeapon()?.m_shared?.m_blockEffect;
         if (HasEffect(blockEffect))
         {
             return blockEffect;
         }
 
         EffectList? unarmedHitEffect = null;
-        if (attack?.m_character is Humanoid humanoid &&
+        if (attack?.GetCharacter() is Humanoid humanoid &&
             humanoid.m_unarmedWeapon?.m_itemData?.m_shared != null)
         {
             unarmedHitEffect = humanoid.m_unarmedWeapon.m_itemData.m_shared.m_hitEffect;
@@ -524,37 +636,37 @@ internal static partial class ShieldRuntimeSystem
 
     private static float GetShieldBlockPower(Attack attack)
     {
-        return attack.m_weapon.GetBlockPower(
-            attack.m_character.GetSkillFactor(Skills.SkillType.Blocking));
+        return attack.GetWeapon().GetBlockPower(
+            attack.GetCharacter().GetSkillFactor(Skills.SkillType.Blocking));
     }
 
     private static bool CanShieldAttackHitCharacter(Attack attack, Character target)
     {
         if (attack == null ||
-            attack.m_character == null ||
-            attack.m_weapon == null ||
+            attack.GetCharacter() == null ||
+            attack.GetWeapon() == null ||
             target == null ||
-            target == attack.m_character)
+            target == attack.GetCharacter())
         {
             return false;
         }
 
-        Character attacker = attack.m_character;
+        Character attacker = attack.GetCharacter();
         bool isEnemy = BaseAI.IsEnemy(attacker, target) ||
                        (target.GetBaseAI() is { } targetAi &&
                         targetAi.IsAggravatable() &&
                         attacker.IsPlayer());
         if (((!attack.m_hitFriendly || attacker.IsTamed()) && !attacker.IsPlayer() && !isEnemy) ||
-            (!attack.m_weapon.m_shared.m_tamedOnly &&
+            (!attack.GetWeapon().m_shared.m_tamedOnly &&
              attacker.IsPlayer() &&
              !attacker.IsPVPEnabled() &&
              !isEnemy) ||
-            (attack.m_weapon.m_shared.m_tamedOnly && !target.IsTamed()))
+            (attack.GetWeapon().m_shared.m_tamedOnly && !target.IsTamed()))
         {
             return false;
         }
 
-        if (attack.m_weapon.m_shared.m_dodgeable && target.IsDodgeInvincible())
+        if (attack.GetWeapon().m_shared.m_dodgeable && target.IsDodgeInvincible())
         {
             if (target is Player dodgingPlayer)
             {
@@ -576,31 +688,33 @@ internal static partial class ShieldRuntimeSystem
     {
         HitData hitData = new()
         {
-            m_toolTier = (short)attack.m_weapon.m_shared.m_toolTier,
+            m_toolTier = (short)attack.GetWeapon().m_shared.m_toolTier,
             m_pushForce = pushForce,
-            m_backstabBonus = attack.m_weapon.m_shared.m_backstabBonus,
+            m_backstabBonus = attack.GetWeapon().m_shared.m_backstabBonus,
             m_staggerMultiplier = 1f,
-            m_blockable = attack.m_weapon.m_shared.m_blockable,
-            m_dodgeable = attack.m_weapon.m_shared.m_dodgeable,
-            m_skill = attack.m_weapon.m_shared.m_skillType,
+            m_blockable = attack.GetWeapon().m_shared.m_blockable,
+            m_dodgeable = attack.GetWeapon().m_shared.m_dodgeable,
+            m_skill = attack.GetWeapon().m_shared.m_skillType,
             m_skillRaiseAmount = attack.m_raiseSkillAmount,
-            m_skillLevel = attack.m_character.GetSkillLevel(attack.m_weapon.m_shared.m_skillType),
-            m_itemLevel = (short)attack.m_weapon.m_quality,
-            m_itemWorldLevel = (byte)attack.m_weapon.m_worldLevel,
+            m_skillLevel = attack.GetCharacter().GetSkillLevel(attack.GetWeapon().m_shared.m_skillType),
+            m_itemLevel = (short)attack.GetWeapon().m_quality,
+            m_itemWorldLevel = (byte)attack.GetWeapon().m_worldLevel,
             m_point = hitPoint,
             m_dir = direction.sqrMagnitude > 0.001f
                 ? direction.normalized
-                : SecondaryAttackManager.GetSentinelForward(attack.m_character),
-            m_healthReturn = attack.m_attackHealthReturnHit
+                : SecondaryAttackManager.GetSentinelForward(attack.GetCharacter()),
+            m_healthReturn = attack.m_attackHealthReturnHit,
+            m_eitrAdd = attack.m_attackEitrAdd,
+            m_variant = attack.GetWeapon().m_shared.m_hitVariant
         };
         hitData.m_damage.m_blunt = damage;
-        hitData.m_statusEffectHash = ResolveAttackStatusEffectHash(attack.m_weapon);
-        hitData.SetAttacker(attack.m_character);
-        hitData.m_hitType = attack.m_character is Player
+        hitData.m_statusEffectHash = ResolveAttackStatusEffectHash(attack.GetWeapon());
+        hitData.SetAttacker(attack.GetCharacter());
+        hitData.m_hitType = attack.GetCharacter() is Player
             ? HitData.HitType.PlayerHit
             : HitData.HitType.EnemyHit;
-        attack.m_character.GetSEMan().ModifyAttack(
-            attack.m_weapon.m_shared.m_skillType,
+        attack.GetCharacter().GetSEMan().ModifyAttack(
+            attack.GetWeapon().m_shared.m_skillType,
             ref hitData);
         return hitData;
     }
@@ -622,7 +736,7 @@ internal static partial class ShieldRuntimeSystem
 
     private static void PlayShieldThrowChargeStartSfx(Attack attack)
     {
-        if (attack?.m_character == null)
+        if (attack?.GetCharacter() == null)
         {
             return;
         }
@@ -642,7 +756,7 @@ internal static partial class ShieldRuntimeSystem
             return;
         }
 
-        Transform origin = attack.m_character.transform;
+        Transform origin = attack.GetCharacter().transform;
         GameObject sfxInstance =
             UnityEngine.Object.Instantiate(sfxPrefab, origin.position, origin.rotation);
         UnityEngine.Object.Destroy(sfxInstance, 6f);

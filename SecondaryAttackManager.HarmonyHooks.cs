@@ -1,4 +1,7 @@
 using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using UnityEngine;
 
@@ -146,12 +149,31 @@ internal static class PlayerUpdatePendingConfigPatch
     {
         if (__instance == Player.m_localPlayer)
         {
+            SecondaryAttackManager.RefreshShieldBlockChargePolicy(__instance);
             ShieldRuntimeSystem.UpdateReturnedShieldAutoEquip(__instance);
         }
     }
 }
 
-[HarmonyPatch(typeof(ObjectDB), nameof(ObjectDB.Awake))]
+[HarmonyPatch(typeof(Player), nameof(Player.SetControls))]
+internal static class PlayerSetControlsShieldChargePatch
+{
+    private static void Postfix(Player __instance)
+    {
+        ShieldRuntimeSystem.ObserveWeaponChargeInput(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(Humanoid), "SetupEquipment")]
+internal static class HumanoidSetupEquipmentShieldChargePolicyPatch
+{
+    private static void Postfix(Humanoid __instance)
+    {
+        SecondaryAttackManager.RefreshShieldBlockChargePolicy(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(ObjectDB), "Awake")]
 internal static class ObjectDbAwakePatch
 {
     private static void Postfix(ObjectDB __instance)
@@ -210,7 +232,37 @@ internal static class HumanoidBlockAttackPatch
     [HarmonyPriority(Priority.Last)]
     private static void Prefix(Humanoid __instance, HitData hit, ItemDrop.ItemData ___m_leftItem, out SecondaryAttackManager.BlockAttackContext? __state)
     {
+        SecondaryAttackManager.RefreshShieldBlockChargePolicy(__instance);
         __state = SecondaryAttackManager.CaptureBlockAttackContext(__instance, hit, ___m_leftItem);
+    }
+
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        // Vanilla increments charges, emits an effect and fires the counterattack in one
+        // branch. Gate its condition without replacing the block or mutating SharedData.
+        FieldInfo enabledField = AccessTools.Field(typeof(ItemDrop.ItemData.SharedData), "m_buildBlockCharges");
+        MethodInfo policy = AccessTools.Method(typeof(SecondaryAttackManager), nameof(SecondaryAttackManager.ShouldBuildShieldBlockCharges));
+        List<CodeInstruction> result = new();
+        int matches = 0;
+        foreach (CodeInstruction instruction in instructions)
+        {
+            result.Add(instruction);
+            if (!instruction.LoadsField(enabledField))
+            {
+                continue;
+            }
+
+            matches++;
+            result.Add(new CodeInstruction(OpCodes.Ldarg_0));
+            result.Add(new CodeInstruction(OpCodes.Call, policy));
+        }
+
+        if (matches != 1)
+        {
+            throw new InvalidOperationException($"Expected one block-charge condition in Humanoid.BlockAttack, found {matches}.");
+        }
+
+        return result;
     }
 
     [HarmonyPriority(Priority.First)]
@@ -310,7 +362,7 @@ internal static class AttackOnAttackTriggerPatch
     }
 }
 
-[HarmonyPatch(typeof(Attack), nameof(Attack.DoMeleeAttack))]
+[HarmonyPatch(typeof(Attack), "DoMeleeAttack")]
 internal static class AttackDoMeleeAttackSecondaryDurabilityFactorPatch
 {
     private static void Prefix(Attack __instance, out SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)
@@ -332,7 +384,7 @@ internal static class AttackDoMeleeAttackSecondaryDurabilityFactorPatch
     }
 }
 
-[HarmonyPatch(typeof(Attack), nameof(Attack.DoAreaAttack))]
+[HarmonyPatch(typeof(Attack), "DoAreaAttack")]
 internal static class AttackDoAreaAttackSecondaryDurabilityFactorPatch
 {
     private static void Prefix(Attack __instance, out SecondaryAttackManager.SecondaryAttackDurabilityAdjustmentState __state)

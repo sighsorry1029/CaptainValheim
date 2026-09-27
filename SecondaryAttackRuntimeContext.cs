@@ -44,7 +44,7 @@ internal static class SecondaryAttackRuntimeContext
         float factor,
         string key)
     {
-        if (attack?.m_character == null ||
+        if (attack?.GetCharacter() == null ||
             target == null ||
             target.m_enemyAdrenalineMultiplier <= 0f ||
             factor <= 0f)
@@ -60,7 +60,7 @@ internal static class SecondaryAttackRuntimeContext
             return false;
         }
 
-        attack.m_character.AddAdrenaline(factor * target.m_enemyAdrenalineMultiplier);
+        attack.GetCharacter().AddAdrenaline(factor * target.m_enemyAdrenalineMultiplier);
         return true;
     }
 

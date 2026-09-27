@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.0.11
+
+- Added server-synchronized options for using shield charge, block-charge counterattacks, and projectile reflection with a one-handed melee weapon. Charge defaults to Off; block charge and reflection default to On.
+- When enabled, Block + Secondary Attack uses shield charge while ordinary weapon attacks remain available. A failed or held charge input cannot fall back to a weapon attack.
+- Block-charge accumulation and counterattacks now respect the equipment policy and YAML enable setting without changing other players' shields; entering disallowed equipment clears stored charges.
+- Prevented direct shield charge from starting during attacks, dodges, knockback, stagger, or other restricted actions.
+- Updated shield hints, tooltips, and the Compendium to explain weapon compatibility while retaining normal weapon hints.
+- Updated the required BepInExPack version to 5.4.2351.
+
+## 1.0.10
+
+- Updated CaptainValheim for Valheim 1.0.7, including the new shield tooltip signature and original game assembly access boundaries.
+- Updated the bundled ServerSync compatibility build for Valheim 1.0.7, fixing configuration initialization and preserving connection-time player, history, administrator, and network-time messages.
+- Preserved Valheim 1.0 damage channels, attack resource effects, and status-effect variants through shield hits and the versioned projectile reflection protocol.
+- Prevented new mid-flight projectile template behavior from bypassing shield throw hit ownership and duplicate-hit handling.
+- Updated the required BepInExPack version to 5.4.2350.
+
 ## 1.0.9
 
 - Reorganized shield throw and charge state alongside their runtime code and removed redundant attack setup forwarding without changing combat rules.
