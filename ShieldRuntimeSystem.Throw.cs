@@ -42,6 +42,8 @@ internal static partial class ShieldRuntimeSystem
     private const string ShieldThrowProjectileMarkerKey = "CaptainValheim_ShieldThrowProjectile";
     private const string ShieldThrowProjectileVisualRootName = "CaptainValheim_ShieldThrowVisualRoot";
     private const string ThrownShieldPickupMarkerKey = "CaptainValheim_ThrownShieldPickup";
+    // Optional FearNoSpear auto-pickup contract: character ID, not network owner or crafter.
+    private const string ThrowerPlayerIdKey = "CaptainValheim.ThrowerPlayerID";
     private const string ShieldThrowImpactAoePrefabName = "Catapult_Ammo_Projectile_AOE";
     private const string ShieldThrowImpactSfxChildName = "sfx";
     private const string ArrowHitSfxPrefabName = "sfx_arrow_hit";
@@ -52,8 +54,6 @@ internal static partial class ShieldRuntimeSystem
     private const float ShieldThrowRedirectSurfaceOffset = 0.15f;
     private const float ShieldThrowReturnTtlPadding = 0.25f;
     private const float ShieldThrowReturnCollisionGraceSeconds = 0.12f;
-    private const float ShieldThrowReturnedShieldEquipRetrySeconds = 1f;
-    private const float ShieldThrowReturnedShieldEquipRetryInterval = 0.1f;
     private const float ShieldThrowDefaultHitRadius = 0.7f;
     private const float ShieldThrowCatapultProjectileSpeed = 18f;
 
@@ -77,34 +77,80 @@ internal static partial class ShieldRuntimeSystem
             return;
         }
 
-        if (state.Shield == null || state.Shield.m_equipped || Time.time > state.RetryUntil)
+        ReturnedShieldEquipDecision decision = state.Decide(
+            IsLocalShieldOwner(humanoid),
+            state.IsReturned && humanoid.GetInventory().ContainsItem(state.Shield),
+            humanoid.LeftItem, humanoid.RightItem,
+            GameAccess.HiddenLeftItem(humanoid), GameAccess.HiddenRightItem(humanoid),
+            humanoid.InAttack() || humanoid.InDodge() || (humanoid.IsSwimming() && !humanoid.IsOnGround()),
+            Time.frameCount);
+        if (decision == ReturnedShieldEquipDecision.Wait)
         {
-            ReturnedShieldEquipStates.Remove(humanoid);
             return;
         }
 
-        if (Time.frameCount < state.NextRetryFrame || Time.time < state.NextRetry)
+        // Consume the intent BEFORE calling the normal, possibly patched API. A
+        // policy rejection is final; it must not become a per-frame forced equip.
+        ReturnedShieldEquipStates.Remove(humanoid);
+        if (decision == ReturnedShieldEquipDecision.Attempt)
         {
-            return;
-        }
-
-        state.NextRetry = Time.time + ShieldThrowReturnedShieldEquipRetryInterval;
-        humanoid.EquipItem(state.Shield);
-        if (state.Shield.m_equipped)
-        {
-            ReturnedShieldEquipStates.Remove(humanoid);
+            humanoid.EquipItem(state.Shield);
         }
     }
 
     private static void EquipReturnedShieldNowOrLater(Humanoid humanoid, ItemDrop.ItemData shield)
     {
-        if (humanoid == null || shield == null)
+        // Only the surviving throw intent may re-equip a direct return. A hand
+        // choice made while the shield was in flight must not be undone here.
+        if (humanoid != null && ReturnedShieldEquipStates.TryGetValue(humanoid, out ReturnedShieldEquipState? state) &&
+            ReferenceEquals(state.Shield, shield))
+        {
+            state.MarkReturned(Time.frameCount);
+        }
+    }
+
+    internal static void QueuePickedUpShieldAutoEquip(Humanoid humanoid, ItemDrop.ItemData shield)
+    {
+        BeginReturnedShieldEquipIntent(humanoid, shield, returned: true);
+    }
+
+    private static bool IsLocalShieldOwner(Humanoid humanoid) =>
+        humanoid is Player player && player == Player.m_localPlayer && !player.IsDead() && player.IsOwner();
+
+    internal static bool CanQueueReturnedShieldAutoEquip(Humanoid humanoid) =>
+        humanoid != null && IsLocalShieldOwner(humanoid) &&
+        humanoid.LeftItem == null && humanoid.RightItem == null &&
+        GameAccess.HiddenLeftItem(humanoid) == null && GameAccess.HiddenRightItem(humanoid) == null;
+
+    private static void BeginReturnedShieldEquipIntent(Humanoid humanoid, ItemDrop.ItemData shield, bool returned)
+    {
+        if (!CanQueueReturnedShieldAutoEquip(humanoid) || shield == null || shield.m_equipped ||
+            shield.m_shared?.m_itemType != ItemDrop.ItemData.ItemType.Shield)
         {
             return;
         }
-
         ReturnedShieldEquipStates.Remove(humanoid);
-        ReturnedShieldEquipStates.Add(humanoid, new ReturnedShieldEquipState(shield));
+        ReturnedShieldEquipStates.Add(humanoid, new ReturnedShieldEquipState(shield, returned, Time.frameCount));
+    }
+
+    internal static void CancelReturnedShieldOnHandChoice(Humanoid humanoid, ItemDrop.ItemData? item)
+    {
+        if (humanoid != null && item?.m_shared != null &&
+            item.m_shared.m_itemType is ItemDrop.ItemData.ItemType.Shield or ItemDrop.ItemData.ItemType.OneHandedWeapon or
+                ItemDrop.ItemData.ItemType.TwoHandedWeapon or ItemDrop.ItemData.ItemType.TwoHandedWeaponLeft or
+                ItemDrop.ItemData.ItemType.Bow or ItemDrop.ItemData.ItemType.Tool or ItemDrop.ItemData.ItemType.Torch)
+        {
+            ReturnedShieldEquipStates.Remove(humanoid);
+        }
+    }
+
+    private static void CancelReturnedShieldEquipIntent(Humanoid? humanoid, ItemDrop.ItemData shield)
+    {
+        if (humanoid != null && ReturnedShieldEquipStates.TryGetValue(humanoid, out ReturnedShieldEquipState? state) &&
+            ReferenceEquals(state.Shield, shield))
+        {
+            ReturnedShieldEquipStates.Remove(humanoid);
+        }
     }
 
     private static void StartShieldThrow(Attack attack, SecondaryAttackDefinition definition)
@@ -136,7 +182,7 @@ internal static partial class ShieldRuntimeSystem
         float flightDistance = speed * ttl;
         int remainingChains = Mathf.Max(0, behavior.ShieldThrowTargets - 1);
         aimDirection = ResolveShieldThrowAimDirection(attack, spawnPoint, aimDirection, flightDistance);
-        if (!TryConsumeShieldForThrow(attack, out ItemDrop.ItemData thrownShield))
+        if (!TryConsumeShieldForThrow(attack, out ItemDrop.ItemData thrownShield, out long throwerPlayerId))
         {
             if (SecondaryAttackManager.TryMarkCompatibilityWarningReported("shield_throw_consume_failed"))
             {
@@ -151,6 +197,7 @@ internal static partial class ShieldRuntimeSystem
             attack,
             launchData,
             thrownShield,
+            throwerPlayerId,
             spawnPoint,
             aimDirection.normalized,
             damage,
@@ -165,7 +212,8 @@ internal static partial class ShieldRuntimeSystem
             return;
         }
 
-        DropThrownShield(thrownShield, spawnPoint, Quaternion.LookRotation(aimDirection));
+        DropThrownShield(thrownShield, throwerPlayerId, spawnPoint, Quaternion.LookRotation(aimDirection));
+        CancelReturnedShieldEquipIntent(attack.GetCharacter(), thrownShield);
     }
 
     private static Vector3 ResolveShieldThrowAimDirection(Attack attack, Vector3 spawnPoint, Vector3 fallbackAimDirection, float maxTravelDistance)
@@ -484,9 +532,10 @@ internal static partial class ShieldRuntimeSystem
         }
     }
 
-    private static bool TryConsumeShieldForThrow(Attack attack, out ItemDrop.ItemData thrownShield)
+    private static bool TryConsumeShieldForThrow(Attack attack, out ItemDrop.ItemData thrownShield, out long throwerPlayerId)
     {
         thrownShield = null!;
+        throwerPlayerId = 0L;
         if (attack.GetCharacter() is not Player player || attack.GetWeapon() == null || attack.GetWeapon().m_dropPrefab == null)
         {
             return false;
@@ -510,6 +559,8 @@ internal static partial class ShieldRuntimeSystem
             return false;
         }
 
+        throwerPlayerId = player.GetPlayerID();
+        BeginReturnedShieldEquipIntent(player, thrownShield, returned: false);
         return true;
     }
 
@@ -517,6 +568,7 @@ internal static partial class ShieldRuntimeSystem
         Attack attack,
         ProjectileLaunchData launchData,
         ItemDrop.ItemData thrownShield,
+        long throwerPlayerId,
         Vector3 spawnPoint,
         Vector3 direction,
         float damage,
@@ -584,7 +636,7 @@ internal static partial class ShieldRuntimeSystem
 
             attack.GetWeapon().m_lastProjectile = projectileObject;
             ShieldProjectileController controller = projectileObject.AddComponent<ShieldProjectileController>();
-            controller.Initialize(attack, projectile, thrownShield, remainingChains, searchRadius, speed, ttl, damageDecay, hitTargets, returningToOwner);
+            controller.Initialize(attack, projectile, thrownShield, throwerPlayerId, remainingChains, searchRadius, speed, ttl, damageDecay, hitTargets, returningToOwner);
 
             return true;
         }
@@ -850,7 +902,7 @@ internal static partial class ShieldRuntimeSystem
         Object.Destroy(sfxInstance, 6f);
     }
 
-    private static void DropThrownShield(ItemDrop.ItemData thrownShield, Vector3 position, Quaternion rotation)
+    private static void DropThrownShield(ItemDrop.ItemData thrownShield, long throwerPlayerId, Vector3 position, Quaternion rotation)
     {
         if (thrownShield == null)
         {
@@ -859,10 +911,18 @@ internal static partial class ShieldRuntimeSystem
 
         thrownShield.m_equipped = false;
         ItemDrop droppedShield = ItemDrop.DropItem(thrownShield, 1, position + Vector3.up * 0.25f, rotation);
-        MarkThrownShieldForAutoEquip(droppedShield);
+        try
+        {
+            MarkThrownShield(droppedShield, throwerPlayerId);
+        }
+        catch (Exception exception)
+        {
+            // The drop already exists; a metadata failure must not trigger a second drop.
+            CaptainValheimPlugin.ModLogger.LogWarning($"Could not tag thrown shield: {exception.Message}");
+        }
     }
 
-    private static void MarkThrownShieldForAutoEquip(ItemDrop? itemDrop)
+    private static void MarkThrownShield(ItemDrop? itemDrop, long throwerPlayerId)
     {
         if (itemDrop == null)
         {
@@ -876,6 +936,7 @@ internal static partial class ShieldRuntimeSystem
         }
 
         nview.GetZDO().Set(ThrownShieldPickupMarkerKey, true);
+        if (throwerPlayerId != 0L) nview.GetZDO().Set(ThrowerPlayerIdKey, throwerPlayerId);
     }
 
     internal static bool TryGetAutoEquipThrownShieldState(GameObject go, out ItemDrop.ItemData shieldItem)
@@ -916,23 +977,46 @@ internal static partial class ShieldRuntimeSystem
         return true;
     }
 
+    private enum ReturnedShieldEquipDecision
+    {
+        Wait,
+        Cancel,
+        Equipped,
+        Attempt
+    }
+
     private sealed class ReturnedShieldEquipState
     {
-        public ReturnedShieldEquipState(ItemDrop.ItemData shield)
+        public ReturnedShieldEquipState(ItemDrop.ItemData shield, bool returned, int frame)
         {
             Shield = shield;
-            RetryUntil = Time.time + ShieldThrowReturnedShieldEquipRetrySeconds;
-            NextRetry = Time.time;
-            NextRetryFrame = Time.frameCount + 1;
+            if (returned) MarkReturned(frame);
         }
 
         public ItemDrop.ItemData Shield { get; }
+        private bool _returned;
+        private int _firstEquipFrame;
+        public bool IsReturned => _returned;
 
-        public float RetryUntil { get; }
+        public void MarkReturned(int frame)
+        {
+            _returned = true;
+            _firstEquipFrame = frame + 1;
+        }
 
-        public float NextRetry { get; set; }
-
-        public int NextRetryFrame { get; }
+        public ReturnedShieldEquipDecision Decide(bool ownerValid, bool inInventory,
+            ItemDrop.ItemData? left, ItemDrop.ItemData? right,
+            ItemDrop.ItemData? hiddenLeft, ItemDrop.ItemData? hiddenRight, bool temporarilyBlocked, int frame)
+        {
+            if (!ownerValid || (_returned && !inInventory)) return ReturnedShieldEquipDecision.Cancel;
+            if (ReferenceEquals(left, Shield)) return ReturnedShieldEquipDecision.Equipped;
+            // A custom inventory slot can set m_equipped without placing the
+            // shield in a hand. Respect that choice, but never call it success.
+            if (left != null || right != null || hiddenLeft != null || hiddenRight != null || Shield.m_equipped)
+                return ReturnedShieldEquipDecision.Cancel;
+            if (!_returned || frame < _firstEquipFrame || temporarilyBlocked) return ReturnedShieldEquipDecision.Wait;
+            return ReturnedShieldEquipDecision.Attempt;
+        }
     }
 
     private sealed class ShieldProjectileController : MonoBehaviour
@@ -941,6 +1025,7 @@ internal static partial class ShieldRuntimeSystem
         private Character? _owner;
         private Projectile _projectile = null!;
         private ItemDrop.ItemData _thrownShield = null!;
+        private long _throwerPlayerId;
         private HashSet<Character> _hitTargets = null!;
         private float _searchRadius;
         private float _speed;
@@ -959,6 +1044,7 @@ internal static partial class ShieldRuntimeSystem
             Attack attack,
             Projectile projectile,
             ItemDrop.ItemData thrownShield,
+            long throwerPlayerId,
             int remainingChains,
             float searchRadius,
             float speed,
@@ -971,6 +1057,7 @@ internal static partial class ShieldRuntimeSystem
             _owner = attack.GetCharacter();
             _projectile = projectile;
             _thrownShield = thrownShield;
+            _throwerPlayerId = throwerPlayerId;
             _remainingChains = Mathf.Max(0, remainingChains);
             _searchRadius = searchRadius;
             _speed = speed;
@@ -1007,12 +1094,17 @@ internal static partial class ShieldRuntimeSystem
                 _projectile.m_onHit -= OnProjectileHit;
             }
 
+            if (!_transferred)
+            {
+                CancelReturnedShieldEquipIntent(_owner as Humanoid, _thrownShield);
+            }
+
             if (!HasAuthority() || _transferred || _dropped || _thrownShield == null)
             {
                 return;
             }
 
-            DropThrownShield(_thrownShield, _lastPosition, transform.rotation);
+            DropThrownShield(_thrownShield, _throwerPlayerId, _lastPosition, transform.rotation);
             _dropped = true;
         }
 
@@ -1074,7 +1166,7 @@ internal static partial class ShieldRuntimeSystem
 
             if (_returningToOwner)
             {
-                DropThrownShield(_thrownShield, hitPoint, transform.rotation);
+                DropThrownShield(_thrownShield, _throwerPlayerId, hitPoint, transform.rotation);
                 _dropped = true;
                 return;
             }
@@ -1105,7 +1197,7 @@ internal static partial class ShieldRuntimeSystem
                 return;
             }
 
-            DropThrownShield(_thrownShield, hitPoint, transform.rotation);
+            DropThrownShield(_thrownShield, _throwerPlayerId, hitPoint, transform.rotation);
             _dropped = true;
         }
 
@@ -1133,6 +1225,7 @@ internal static partial class ShieldRuntimeSystem
                     _attack!,
                     nextLaunchData,
                     _thrownShield,
+                    _throwerPlayerId,
                     ResolveShieldRedirectSpawnPoint(hitPoint, normal, direction),
                     direction,
                     Mathf.Max(0f, damage),
@@ -1354,6 +1447,7 @@ internal static partial class ShieldRuntimeSystem
                     _attack!,
                     returnLaunchData,
                     _thrownShield,
+                    _throwerPlayerId,
                     ResolveShieldRedirectSpawnPoint(hitPoint, normal, direction),
                     direction,
                     0f,
@@ -1416,7 +1510,7 @@ internal static partial class ShieldRuntimeSystem
             _thrownShield.m_equipped = false;
             if (!inventory.CanAddItem(_thrownShield) || !inventory.AddItem(_thrownShield))
             {
-                DropThrownShield(_thrownShield, _lastPosition, transform.rotation);
+                DropThrownShield(_thrownShield, _throwerPlayerId, _lastPosition, transform.rotation);
                 _dropped = true;
                 DestroyCurrentProjectile();
                 return true;

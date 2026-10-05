@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.12
+
+- Reduced shield key-hint UI work by preventing the game's combat hints and CaptainValheim's hints from repeatedly toggling each other every frame. Preserved normal weapon hints when using a shield with a melee weapon and cleaned up owned hints when the HUD is destroyed.
+- Improved automatic re-equipping after direct shield returns and marked ground pickups. Re-equipping now waits for temporary attack, dodge, or swimming restrictions to end instead of expiring after one second.
+- A new hand equipment choice cancels pending re-equipping. Other mods' equipment restrictions remain authoritative; a rejected equip leaves the shield in the inventory without repeated attempts or extra item drops.
+- Added thrower identity metadata to dropped thrown shields for optional FearNoSpear integration. Compatible FearNoSpear versions can restrict automatic pickup to the thrower while retaining manual pickup; metadata failures after a successful drop do not trigger a duplicate drop.
+
 ## 1.0.11
 
 - Added server-synchronized options for using shield charge, block-charge counterattacks, and projectile reflection with a one-handed melee weapon. Charge defaults to Off; block charge and reflection default to On.

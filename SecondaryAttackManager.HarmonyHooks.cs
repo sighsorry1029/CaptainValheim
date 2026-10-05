@@ -206,10 +206,13 @@ internal static class HumanoidGetCurrentWeaponPatch
 [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.Pickup))]
 internal static class HumanoidPickupThrownShieldPatch
 {
-    private static void Prefix(GameObject go, ref ItemDrop.ItemData __state)
+    private static void Prefix(Humanoid __instance, GameObject go, ref ItemDrop.ItemData __state)
     {
         __state = null!;
-        ShieldRuntimeSystem.TryGetAutoEquipThrownShieldState(go, out __state);
+        if (ShieldRuntimeSystem.CanQueueReturnedShieldAutoEquip(__instance))
+        {
+            ShieldRuntimeSystem.TryGetAutoEquipThrownShieldState(go, out __state);
+        }
     }
 
     private static void Postfix(Humanoid __instance, bool __result, ItemDrop.ItemData __state)
@@ -219,11 +222,22 @@ internal static class HumanoidPickupThrownShieldPatch
             return;
         }
 
-        if (player.LeftItem != __state)
-        {
-            player.EquipItem(__state);
-        }
+        ShieldRuntimeSystem.QueuePickedUpShieldAutoEquip(player, __state);
     }
+}
+
+[HarmonyPatch(typeof(Humanoid), nameof(Humanoid.UseItem))]
+internal static class HumanoidUseItemCancelReturnedShieldPatch
+{
+    private static void Prefix(Humanoid __instance, ItemDrop.ItemData item) =>
+        ShieldRuntimeSystem.CancelReturnedShieldOnHandChoice(__instance, item);
+}
+
+[HarmonyPatch(typeof(Humanoid), nameof(Humanoid.EquipItem))]
+internal static class HumanoidEquipItemCancelReturnedShieldPatch
+{
+    private static void Prefix(Humanoid __instance, ItemDrop.ItemData item) =>
+        ShieldRuntimeSystem.CancelReturnedShieldOnHandChoice(__instance, item);
 }
 
 [HarmonyPatch(typeof(Humanoid), "BlockAttack")]

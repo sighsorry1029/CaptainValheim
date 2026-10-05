@@ -96,6 +96,7 @@ var gui = resolver.Resolve(new AssemblyNameReference("assembly_guiutils", new Ve
 foreach (var (typeName, name, fieldType) in new (string, string, string)[] {
     ("Attack", "m_character", "Humanoid"), ("Attack", "m_weapon", "ItemDrop/ItemData"), ("Attack", "m_baseAI", "BaseAI"),
     ("Humanoid", "m_currentAttack", "Attack"), ("KeyHints", "m_keyHintsEnabled", "System.Boolean"),
+    ("Humanoid", "m_hiddenLeftItem", "ItemDrop/ItemData"), ("Humanoid", "m_hiddenRightItem", "ItemDrop/ItemData"),
     ("Humanoid", "m_blockCharges", "System.Int32"), ("Humanoid", "m_blockChargeRemoveTimer", "System.Single"),
     ("Character", "m_secondaryAttack", "System.Boolean"), ("Character", "m_secondaryAttackHold", "System.Boolean"),
     ("Character", "m_blocking", "System.Boolean"), ("Player", "m_queuedSecondAttackTimer", "System.Single"),
@@ -131,19 +132,27 @@ int protocolAssertions = 0;
 int equipmentPolicyAssertions = 0;
 int transpilerContractAssertions = 0;
 int configurationAssertions = 0;
+int returnedShieldAssertions = 0;
+int returnedShieldContractAssertions = 0;
+int keyHintAssertions = 0;
+int keyHintContractAssertions = 0;
 if (errors.Count == 0)
 {
     try
     {
         configurationAssertions = EquipmentPolicyTests.CheckConfiguration(mod);
         transpilerContractAssertions = EquipmentPolicyTests.CheckTranspilerContract(game, mod);
-        (protocolAssertions, equipmentPolicyAssertions) = ManagedProtocolTests.Run(args[0], args[1], args[2]);
+        returnedShieldContractAssertions = ReturnedShieldTests.CheckContract(mod);
+        keyHintContractAssertions = KeyHintPolicyTests.CheckContract(mod, game);
+        (protocolAssertions, equipmentPolicyAssertions, returnedShieldAssertions, keyHintAssertions) =
+            ManagedProtocolTests.Run(args[0], args[1], args[2]);
     }
     catch (Exception e) { errors.Add("Isolated managed/contract test failed: " + e); }
 }
-File.WriteAllText(args[3], JsonSerializer.Serialize(new { mod = Path.GetFullPath(args[0]), managed = Path.GetFullPath(args[1]), members, patches, reflected, protocolAssertions, equipmentPolicyAssertions, transpilerContractAssertions, configurationAssertions, errors }, new JsonSerializerOptions { WriteIndented = true }));
+File.WriteAllText(args[3], JsonSerializer.Serialize(new { mod = Path.GetFullPath(args[0]), managed = Path.GetFullPath(args[1]), members, patches, reflected, protocolAssertions, equipmentPolicyAssertions, transpilerContractAssertions, configurationAssertions, returnedShieldAssertions, returnedShieldContractAssertions, keyHintAssertions, keyHintContractAssertions, errors }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine($"Game references: {members.Count}; Harmony targets: {patches.Count}; reflection contracts: {reflected.Count}; errors: {errors.Count}");
 Console.WriteLine($"Managed protocol assertions: {protocolAssertions} (no Unity/Harmony/network execution)");
 Console.WriteLine($"Equipment/input assertions: {equipmentPolicyAssertions}; static transpiler contracts: {transpilerContractAssertions}; synchronized config contracts: {configurationAssertions} (no transpiler/patch installation or Unity gameplay execution)");
+Console.WriteLine($"Return intent assertions: {returnedShieldAssertions}; return contracts: {returnedShieldContractAssertions}; key hint policy assertions: {keyHintAssertions}; key hint contracts: {keyHintContractAssertions} (isolated managed/static only)");
 foreach (var error in errors) Console.WriteLine(error);
 return errors.Count == 0 ? 0 : 1;

@@ -18,6 +18,10 @@ internal static class GameAccess
         AccessTools.FieldRefAccess<Attack, BaseAI>("m_baseAI");
     internal static readonly AccessTools.FieldRef<Humanoid, Attack> CurrentAttack =
         AccessTools.FieldRefAccess<Humanoid, Attack>("m_currentAttack");
+    internal static readonly AccessTools.FieldRef<Humanoid, ItemDrop.ItemData> HiddenLeftItem =
+        AccessTools.FieldRefAccess<Humanoid, ItemDrop.ItemData>("m_hiddenLeftItem");
+    internal static readonly AccessTools.FieldRef<Humanoid, ItemDrop.ItemData> HiddenRightItem =
+        AccessTools.FieldRefAccess<Humanoid, ItemDrop.ItemData>("m_hiddenRightItem");
     internal static readonly AccessTools.FieldRef<Humanoid, int> BlockCharges =
         AccessTools.FieldRefAccess<Humanoid, int>("m_blockCharges");
     internal static readonly AccessTools.FieldRef<Humanoid, float> BlockChargeRemoveTimer =

@@ -108,7 +108,10 @@ Each option grants permission to use its feature with a one-handed melee weapon 
 - Input: secondary attack
 - Used when the player is not currently blocking
 - Requires an empty right hand
-- Unequips and removes the shield from the inventory, throws it, chains to nearby targets, then returns it to the inventory and re-equips it
+- Unequips and removes the shield from the inventory, throws it, chains to nearby targets, then returns it to the inventory
+- Automatic re-equipping waits for temporary attack, dodge, or swimming restrictions to end. Direct returns and marked ground pickups use the same deferred equip policy.
+- A hand equipment choice during flight or while waiting cancels automatic re-equipping. Both active and sheathed hands must remain empty; another mod's equipment restrictions are respected.
+- Re-equipping never adds another item or drops a second copy. A shield whose equip attempt is rejected stays in the inventory for manual use.
 - Drops the shield back into the world when it cannot be returned to the inventory, including when the inventory is full
 
 ### Charge

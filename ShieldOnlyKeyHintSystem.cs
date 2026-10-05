@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
 using HarmonyLib;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -12,6 +15,9 @@ internal static class ShieldOnlyKeyHintSystem
     private static ShieldHintState _lastHintState = ShieldHintState.Hidden;
     private static bool _hasLastHintState;
     private static bool _showingHints;
+    private static KeyHints? _preparedOwner;
+    private static ShieldHintState _preparedState = ShieldHintState.Hidden;
+    private static bool _preparedVisible;
 
     internal static void InitializeKeyHints(KeyHints hints)
     {
@@ -19,38 +25,59 @@ internal static class ShieldOnlyKeyHintSystem
         _hasLastHintState = false;
         _lastHintState = ShieldHintState.Hidden;
         _showingHints = false;
-        UpdateKeyHint(hints);
+        _preparedOwner = hints;
+        _preparedVisible = false;
     }
 
-    internal static void UpdateKeyHint(KeyHints hints)
+    internal static void DestroyKeyHints(KeyHints hints)
+    {
+        if (ReferenceEquals(_preparedOwner, hints))
+        {
+            Dispose();
+        }
+    }
+
+    internal static void PrepareKeyHintUpdate(KeyHints hints)
+    {
+        _preparedOwner = hints;
+        _preparedState = ShieldHintState.Hidden;
+        Player? player = Player.m_localPlayer;
+        _preparedVisible = ShouldShowCustomCombatHints(hints, player) &&
+                           TryBuildHintState(player!, out _preparedState) && _preparedState.HasRows;
+    }
+
+    // Filter the original visibility decision before SetActive, so vanilla and the
+    // postfix never disable/re-enable the same combat hierarchy in a single frame.
+    internal static bool FilterCombatHintVisibility(bool vanillaVisible, KeyHints hints, bool combatGroup)
+    {
+        if (!ReferenceEquals(_preparedOwner, hints) || !_preparedVisible)
+        {
+            return vanillaVisible;
+        }
+
+        return combatGroup || (_preparedState.PreserveWeaponHints && vanillaVisible);
+    }
+
+    internal static void UpdateKeyHint(KeyHints hints, bool originalRan)
     {
         if (hints == null)
         {
             return;
         }
 
-        Player? player = Player.m_localPlayer;
-        if (!ShouldShowCustomCombatHints(hints, player))
-        {
-            HideHints();
-            if (hints.m_combatHints != null)
-            {
-                hints.m_combatHints.SetActive(false);
-            }
-
-            return;
-        }
-
-        if (!TryBuildHintState(player!, out ShieldHintState state) || !state.HasRows)
+        // A prefix from another mod may own the entire hints update for its custom
+        // equipment. Respect that replacement instead of toggling its UI afterward.
+        if (!originalRan || !ReferenceEquals(_preparedOwner, hints) || !_preparedVisible)
         {
             HideHints();
             RememberHintState(ShieldHintState.Hidden);
             return;
         }
 
+        ShieldHintState state = _preparedState;
         if (_showingHints && _hasLastHintState && _lastHintState.Equals(state))
         {
-            PrepareCombatHintGroup(hints, state.PreserveWeaponHints);
+            HideVanillaWeaponHints(hints, state.PreserveWeaponHints);
             return;
         }
 
@@ -61,7 +88,7 @@ internal static class ShieldOnlyKeyHintSystem
             return;
         }
 
-        PrepareCombatHintGroup(hints, state.PreserveWeaponHints);
+        HideVanillaWeaponHints(hints, state.PreserveWeaponHints);
         for (int index = 0; index < HintCells.Count; index++)
         {
             KeyHintCell cell = HintCells[index];
@@ -150,20 +177,16 @@ internal static class ShieldOnlyKeyHintSystem
                (InventoryGui.instance == null ||
                  (!InventoryGui.instance.IsSkillsPanelOpen &&
                   !InventoryGui.instance.IsTrophisPanelOpen &&
+                  !InventoryGui.instance.IsAchievementsPanelOpen &&
                   !InventoryGui.instance.IsTextPanelOpen)) &&
                !PlayerCustomizaton.IsBarberGuiVisible() &&
                player.GetDoodadController() == null;
     }
 
-    private static void PrepareCombatHintGroup(KeyHints hints, bool preserveWeaponHints)
+    private static void HideVanillaWeaponHints(KeyHints hints, bool preserveWeaponHints)
     {
-        if (hints.m_combatHints != null)
-        {
-            hints.m_combatHints.SetActive(true);
-        }
-
-        // UpdateHints has already selected the weapon's primary/secondary hints.
-        // Mixed equipment adds the charge chord without replacing those weapon controls.
+        // The untargeted unarmed branch does not set these children. Clear any
+        // previous weapon's flags on entry as well as preserving mixed weapon hints.
         if (preserveWeaponHints)
         {
             return;
@@ -322,6 +345,9 @@ internal static class ShieldOnlyKeyHintSystem
         _lastHintState = ShieldHintState.Hidden;
         _hasLastHintState = false;
         _showingHints = false;
+        _preparedOwner = null;
+        _preparedVisible = false;
+        _preparedState = ShieldHintState.Hidden;
     }
 
     private static void DestroyHints()
@@ -404,8 +430,79 @@ internal static class KeyHintsAwakeShieldOnlyPatch
 [HarmonyPatch(typeof(KeyHints), "UpdateHints")]
 internal static class KeyHintsUpdateShieldOnlyPatch
 {
+    [HarmonyPriority(Priority.First)]
+    private static void Prefix(KeyHints __instance)
+    {
+        ShieldOnlyKeyHintSystem.PrepareKeyHintUpdate(__instance);
+    }
+
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        MethodInfo setActive = typeof(GameObject).GetMethod(nameof(GameObject.SetActive), [typeof(bool)])!;
+        MethodInfo filter = typeof(ShieldOnlyKeyHintSystem).GetMethod(nameof(ShieldOnlyKeyHintSystem.FilterCombatHintVisibility), BindingFlags.Static | BindingFlags.NonPublic)!;
+        Dictionary<string, int> counts = new()
+        {
+            [nameof(KeyHints.m_combatHints)] = 0,
+            [nameof(KeyHints.m_bowDrawGP)] = 0,
+            [nameof(KeyHints.m_bowDrawKB)] = 0,
+            [nameof(KeyHints.m_primaryAttackGP)] = 0,
+            [nameof(KeyHints.m_primaryAttackKB)] = 0,
+            [nameof(KeyHints.m_secondaryAttackGP)] = 0,
+            [nameof(KeyHints.m_secondaryAttackKB)] = 0
+        };
+        List<CodeInstruction> source = new(instructions);
+        List<CodeInstruction> result = new(source.Count + 45);
+        for (int index = 0; index < source.Count; index++)
+        {
+            CodeInstruction instruction = source[index];
+            if (instruction.Calls(setActive) && index >= 3 &&
+                source[index - 3].opcode == OpCodes.Ldarg_0 &&
+                source[index - 2].opcode == OpCodes.Ldfld &&
+                source[index - 2].operand is FieldInfo field && field.DeclaringType == typeof(KeyHints) &&
+                counts.ContainsKey(field.Name) && IsVisibilityLoad(source[index - 1]))
+            {
+                counts[field.Name]++;
+                CodeInstruction owner = new(OpCodes.Ldarg_0);
+                owner.MoveLabelsFrom(instruction);
+                result.Add(owner);
+                result.Add(new CodeInstruction(field.Name == nameof(KeyHints.m_combatHints) ? OpCodes.Ldc_I4_1 : OpCodes.Ldc_I4_0));
+                result.Add(new CodeInstruction(OpCodes.Call, filter));
+            }
+
+            result.Add(instruction);
+        }
+
+        foreach (KeyValuePair<string, int> count in counts)
+        {
+            int expected = count.Key == nameof(KeyHints.m_combatHints) ? 9 : 1;
+            if (count.Value != expected)
+            {
+                throw new InvalidOperationException($"Expected {expected} visibility writes for KeyHints.{count.Key}, found {count.Value}.");
+            }
+        }
+
+        return result;
+    }
+
+    private static bool IsVisibilityLoad(CodeInstruction instruction)
+    {
+        OpCode code = instruction.opcode;
+        return code == OpCodes.Ldc_I4_0 || code == OpCodes.Ldc_I4_1 || code == OpCodes.Ldloc ||
+               code == OpCodes.Ldloc_S || code == OpCodes.Ldloc_0 || code == OpCodes.Ldloc_1 ||
+               code == OpCodes.Ldloc_2 || code == OpCodes.Ldloc_3;
+    }
+
+    private static void Postfix(KeyHints __instance, bool __runOriginal)
+    {
+        ShieldOnlyKeyHintSystem.UpdateKeyHint(__instance, __runOriginal);
+    }
+}
+
+[HarmonyPatch(typeof(KeyHints), "OnDestroy")]
+internal static class KeyHintsDestroyShieldOnlyPatch
+{
     private static void Postfix(KeyHints __instance)
     {
-        ShieldOnlyKeyHintSystem.UpdateKeyHint(__instance);
+        ShieldOnlyKeyHintSystem.DestroyKeyHints(__instance);
     }
 }

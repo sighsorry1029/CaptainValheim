@@ -7,7 +7,7 @@ internal static class ManagedProtocolTests
 
     // Runs actual mod/game managed codec methods, without substituting/publicizing the
     // game DLL. This .NET host does not validate Unity native code, Harmony or networking.
-    internal static (int Protocol, int EquipmentPolicy) Run(string modPath, string managed, string core)
+    internal static (int Protocol, int EquipmentPolicy, int ReturnedShield, int KeyHintPolicy) Run(string modPath, string managed, string core)
     {
         Assembly? Resolve(AssemblyLoadContext context, AssemblyName name)
         {
@@ -85,7 +85,9 @@ internal static class ManagedProtocolTests
                 Check(!(bool)envelopeType.GetMethod("TryDeserialize", All)!.Invoke(null, new object?[] { invalidPacket, null })!, "Old/truncated envelope rejected: " + version);
             }
             int equipmentAssertions = EquipmentPolicyTests.Run(game, mod);
-            return (assertions, equipmentAssertions);
+            int returnedShieldAssertions = ReturnedShieldTests.Run(game, mod);
+            int keyHintAssertions = KeyHintPolicyTests.Run(game, mod);
+            return (assertions, equipmentAssertions, returnedShieldAssertions, keyHintAssertions);
         }
         finally { AssemblyLoadContext.Default.Resolving -= Resolve; }
     }
