@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.13
+
+- Thrown shields now retain their equipped appearance and style, including appearances applied by Armoire, through ricochets and the return flight.
+- Synchronize the launch-time appearance separately from the real shield. Damage, durability, inventory returns, and dropped item identity remain unchanged; reflected arrows and spells are excluded.
+- Apply the selected mesh once during visual creation, handle late appearance data, and fall back to the original shield when a cosmetic prefab is unavailable. Unchanged appearances and repeated asset failures do not trigger per-frame mesh recreation.
+- Armoire remains optional, with no required dependency or exact-version restriction. Compatibility uses the game's resolved equipment appearance rather than Armoire's private settings or save format.
+
 ## 1.0.12
 
 - Reduced shield key-hint UI work by preventing the game's combat hints and CaptainValheim's hints from repeatedly toggling each other every frame. Preserved normal weapon hints when using a shield with a melee weapon and cleaned up owned hints when the HUD is destroyed.

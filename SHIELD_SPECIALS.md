@@ -112,6 +112,7 @@ Each option grants permission to use its feature with a one-handed melee weapon 
 - Automatic re-equipping waits for temporary attack, dodge, or swimming restrictions to end. Direct returns and marked ground pickups use the same deferred equip policy.
 - A hand equipment choice during flight or while waiting cancels automatic re-equipping. Both active and sheathed hands must remain empty; another mod's equipment restrictions are respected.
 - Re-equipping never adds another item or drops a second copy. A shield whose equip attempt is rejected stays in the inventory for manual use.
+- Captures the equipped left-hand visual prefab and style before throwing and carries that snapshot through ricochets and return flight. Cosmetic appearance is synchronized separately from the real item; unavailable cosmetic prefabs fall back to the original shield. No Armoire dependency is required.
 - Drops the shield back into the world when it cannot be returned to the inventory, including when the inventory is full
 
 ### Charge

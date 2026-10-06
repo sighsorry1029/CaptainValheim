@@ -12,7 +12,9 @@ CaptainValheim lets a shield act as a real close-range weapon instead of only a 
 **Shield Throw**  
 Throw your shield forward as a returning weapon. The throw can hit multiple targets, lose power through damage decay, search for nearby targets, and return after its lifetime expires. Damage, push force, target count, damage decay, ricochet search radius, flight lifetime, stamina cost, and durability cost can all be tuned, while the final result still scales from the shield you actually equipped.
 
-With FearNoSpear, dropped thrown shields can only be auto-picked up by the thrower. Other players can still pick them up manually. Use the updated versions on participating clients. FearNoSpear is optional; without it, pickup behavior is unchanged. Shield returns and automatic re-equipping still work as before.
+With FearNoSpear, dropped thrown shields can only be auto-picked up by the thrower. Other players can still pick them up manually. Use the updated versions on participating clients. FearNoSpear is optional; without it, pickup behavior is unchanged. FearNoSpear does not change CaptainValheim's shield-return handling.
+
+Thrown shields retain the equipped visual prefab and style, including appearances applied by Armoire, through ricochets and the return flight. This only changes presentation; the original shield's stats and returned item are preserved. Peers without the cosmetic prefab display the original shield instead.
 
 ![](https://i.ibb.co/ZpmyTscz/shieldbash.gif) <br>
 

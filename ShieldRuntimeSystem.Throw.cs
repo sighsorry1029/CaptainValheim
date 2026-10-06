@@ -7,6 +7,28 @@ using Object = UnityEngine.Object;
 
 namespace CaptainValheim;
 
+internal readonly struct ShieldProjectileAppearance
+{
+    internal ShieldProjectileAppearance(int prefabHash, int variant)
+    {
+        PrefabHash = prefabHash;
+        Variant = variant;
+    }
+
+    internal int PrefabHash { get; }
+    internal int Variant { get; }
+
+    internal long Pack() => PrefabHash == 0 || Variant < 0
+        ? 0L
+        : unchecked(((long)(uint)PrefabHash << 32) | (uint)Variant);
+
+    internal static bool TryUnpack(long packed, out ShieldProjectileAppearance appearance)
+    {
+        appearance = new ShieldProjectileAppearance(unchecked((int)(packed >> 32)), unchecked((int)packed));
+        return packed != 0L && appearance.PrefabHash != 0 && appearance.Variant >= 0;
+    }
+}
+
 internal readonly struct ProjectileLaunchData
 {
     internal ProjectileLaunchData(
@@ -41,6 +63,7 @@ internal static partial class ShieldRuntimeSystem
     private const string ShieldThrowCatapultProjectilePrefabName = "Catapult_Ammo_Projectile";
     private const string ShieldThrowProjectileMarkerKey = "CaptainValheim_ShieldThrowProjectile";
     private const string ShieldThrowProjectileVisualRootName = "CaptainValheim_ShieldThrowVisualRoot";
+    private const string ShieldThrowAppearanceKey = "CaptainValheim_ShieldAppearance";
     private const string ThrownShieldPickupMarkerKey = "CaptainValheim_ThrownShieldPickup";
     // Optional FearNoSpear auto-pickup contract: character ID, not network owner or crafter.
     private const string ThrowerPlayerIdKey = "CaptainValheim.ThrowerPlayerID";
@@ -58,6 +81,7 @@ internal static partial class ShieldRuntimeSystem
     private const float ShieldThrowCatapultProjectileSpeed = 18f;
 
     private static readonly ConditionalWeakTable<Humanoid, ReturnedShieldEquipState> ReturnedShieldEquipStates = new();
+    private static readonly ConditionalWeakTable<Projectile, ShieldProjectileVisualState> ShieldProjectileVisualStates = new();
     private static readonly RaycastHit[] AimRayHits = new RaycastHit[64];
     private static ProjectileLaunchData _shieldThrowTemplateLaunchData;
     private static string _shieldThrowTemplateSource = string.Empty;
@@ -182,7 +206,8 @@ internal static partial class ShieldRuntimeSystem
         float flightDistance = speed * ttl;
         int remainingChains = Mathf.Max(0, behavior.ShieldThrowTargets - 1);
         aimDirection = ResolveShieldThrowAimDirection(attack, spawnPoint, aimDirection, flightDistance);
-        if (!TryConsumeShieldForThrow(attack, out ItemDrop.ItemData thrownShield, out long throwerPlayerId))
+        if (!TryConsumeShieldForThrow(attack, out ItemDrop.ItemData thrownShield, out long throwerPlayerId,
+                out ShieldProjectileAppearance appearance))
         {
             if (SecondaryAttackManager.TryMarkCompatibilityWarningReported("shield_throw_consume_failed"))
             {
@@ -198,6 +223,7 @@ internal static partial class ShieldRuntimeSystem
             launchData,
             thrownShield,
             throwerPlayerId,
+            appearance,
             spawnPoint,
             aimDirection.normalized,
             damage,
@@ -532,16 +558,41 @@ internal static partial class ShieldRuntimeSystem
         }
     }
 
-    private static bool TryConsumeShieldForThrow(Attack attack, out ItemDrop.ItemData thrownShield, out long throwerPlayerId)
+    private static ShieldProjectileAppearance CaptureShieldProjectileAppearance(Player player, ItemDrop.ItemData item)
+    {
+        ShieldProjectileAppearance fallback = new(item.m_dropPrefab.name.GetStableHashCode(), Mathf.Max(0, item.m_variant));
+        try
+        {
+            // Read the already resolved presentation before Unequip clears it.
+            // The gameplay item, prefab and custom data remain untouched.
+            if (!ReferenceEquals(player.LeftItem, item)) return fallback;
+            ZNetView? nview = player.GetComponent<ZNetView>();
+            if (nview == null || !nview.IsValid() || !nview.IsOwner()) return fallback;
+            ZDO zdo = nview.GetZDO();
+            int hash = zdo.GetInt(ZDOVars.s_leftItem);
+            int variant = zdo.GetInt(ZDOVars.s_leftItemVariant);
+            return hash != 0 && variant >= 0 ? new ShieldProjectileAppearance(hash, variant) : fallback;
+        }
+        catch (Exception exception)
+        {
+            ReportShieldVisualFailure(exception);
+            return fallback;
+        }
+    }
+
+    private static bool TryConsumeShieldForThrow(Attack attack, out ItemDrop.ItemData thrownShield, out long throwerPlayerId,
+        out ShieldProjectileAppearance appearance)
     {
         thrownShield = null!;
         throwerPlayerId = 0L;
+        appearance = default;
         if (attack.GetCharacter() is not Player player || attack.GetWeapon() == null || attack.GetWeapon().m_dropPrefab == null)
         {
             return false;
         }
 
         ItemDrop.ItemData equippedShield = attack.GetWeapon();
+        appearance = CaptureShieldProjectileAppearance(player, equippedShield);
         bool wasEquipped = equippedShield.m_equipped;
         thrownShield = equippedShield.Clone();
         thrownShield.m_stack = 1;
@@ -569,6 +620,7 @@ internal static partial class ShieldRuntimeSystem
         ProjectileLaunchData launchData,
         ItemDrop.ItemData thrownShield,
         long throwerPlayerId,
+        ShieldProjectileAppearance appearance,
         Vector3 spawnPoint,
         Vector3 direction,
         float damage,
@@ -632,11 +684,11 @@ internal static partial class ShieldRuntimeSystem
 
             IgnoreShieldProjectileOwnerCollisions(projectileObject, attack.GetCharacter());
 
-            ApplyShieldProjectileVisual(projectile, thrownShield);
+            ApplyShieldProjectileVisual(projectile, thrownShield, appearance);
 
             attack.GetWeapon().m_lastProjectile = projectileObject;
             ShieldProjectileController controller = projectileObject.AddComponent<ShieldProjectileController>();
-            controller.Initialize(attack, projectile, thrownShield, throwerPlayerId, remainingChains, searchRadius, speed, ttl, damageDecay, hitTargets, returningToOwner);
+            controller.Initialize(attack, projectile, thrownShield, throwerPlayerId, appearance, remainingChains, searchRadius, speed, ttl, damageDecay, hitTargets, returningToOwner);
 
             return true;
         }
@@ -726,29 +778,35 @@ internal static partial class ShieldRuntimeSystem
             .ToArray();
     }
 
-    internal static void PrepareShieldThrowProjectileIfNeeded(Projectile projectile)
+    internal static bool TryUpdateShieldThrowProjectileVisual(Projectile projectile)
     {
-        if (!IsMarkedShieldProjectile(projectile))
+        if (!IsMarkedShieldProjectile(projectile)) return false;
+        ShieldProjectileVisualState state = ShieldProjectileVisualStates.GetValue(projectile, _ => new ShieldProjectileVisualState());
+        long packed = 0L;
+        int fallbackVariant = 0;
+        try
         {
-            return;
-        }
+            ZDO zdo = projectile.GetComponent<ZNetView>().GetZDO();
+            packed = zdo.GetLong(ShieldThrowAppearanceKey);
+            fallbackVariant = Mathf.Max(0, zdo.GetInt(ZDOVars.s_variant));
+            bool visualIntact = state.Visual != null && state.Visual == projectile.m_visual &&
+                                fallbackVariant == state.FallbackVariant;
+            if (!state.ShouldApply(packed, visualIntact)) return true;
 
-        if (GameAccess.ChangedVisual(projectile))
+            string fallbackName = zdo.GetString(ZDOVars.s_visual);
+            // Spawn/ZDO delivery can precede the visual payload. Leave the
+            // request pending until the base identity and ObjectDB are ready.
+            if (string.IsNullOrEmpty(fallbackName) || ObjectDB.instance == null) return true;
+            ApplyShieldProjectileAppearance(projectile, state, packed, fallbackName, fallbackVariant);
+        }
+        catch (Exception exception)
         {
-            return;
+            state.Visual = projectile.m_visual;
+            state.FallbackVariant = fallbackVariant;
+            state.MarkFailed(packed);
+            ReportShieldVisualFailure(exception);
         }
-
-        PrepareShieldProjectileForVisualSwap(projectile);
-    }
-
-    internal static void EnsureShieldThrowProjectileVisualSpinIfNeeded(Projectile projectile)
-    {
-        if (!IsMarkedShieldProjectile(projectile))
-        {
-            return;
-        }
-
-        ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
+        return true;
     }
 
     private static void MarkShieldProjectile(Projectile projectile)
@@ -798,12 +856,13 @@ internal static partial class ShieldRuntimeSystem
         ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
     }
 
-    private static void HideShieldProjectileSourcePresentation(Projectile projectile)
+    private static void HideShieldProjectileSourcePresentation(Projectile projectile, GameObject? preserve = null)
     {
         ShieldProjectileRendererBuffer.Clear();
         projectile.GetComponentsInChildren(includeInactive: true, ShieldProjectileRendererBuffer);
         foreach (Renderer renderer in ShieldProjectileRendererBuffer)
         {
+            if (preserve != null && renderer.transform.IsChildOf(preserve.transform)) continue;
             if (renderer is TrailRenderer || renderer is ParticleSystemRenderer)
             {
                 continue;
@@ -815,25 +874,109 @@ internal static partial class ShieldRuntimeSystem
         ShieldProjectileRendererBuffer.Clear();
     }
 
-    private static void ApplyShieldProjectileVisual(Projectile projectile, ItemDrop.ItemData thrownShield)
+    private static void ApplyShieldProjectileVisual(Projectile projectile, ItemDrop.ItemData thrownShield,
+        ShieldProjectileAppearance appearance)
     {
         if (thrownShield.m_dropPrefab == null)
         {
             return;
         }
 
-        ZNetView? nview = projectile.GetComponent<ZNetView>();
-        bool nviewValid = nview != null && nview.IsValid();
-        if (projectile.m_canChangeVisuals && projectile.m_visual != null && nviewValid)
+        try
         {
-            nview!.GetZDO().Set(ZDOVars.s_visual, thrownShield.m_dropPrefab.name);
-            GameAccess.UpdateVisual(projectile);
-            ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
-            return;
+            ZNetView? nview = projectile.GetComponent<ZNetView>();
+            if (nview != null && nview.IsValid() && nview.IsOwner())
+            {
+                ZDO zdo = nview.GetZDO();
+                zdo.Set(ShieldThrowAppearanceKey, appearance.Pack());
+                zdo.Set(ZDOVars.s_variant, Mathf.Max(0, thrownShield.m_variant));
+                // Retain the actual item for peers without cosmetic support.
+                zdo.Set(ZDOVars.s_visual, thrownShield.m_dropPrefab.name);
+                GameAccess.UpdateVisual(projectile);
+                return;
+            }
+
+            ShieldProjectileVisualState state = ShieldProjectileVisualStates.GetValue(projectile, _ => new ShieldProjectileVisualState());
+            ApplyShieldProjectileAppearance(projectile, state, appearance.Pack(), thrownShield.m_dropPrefab.name,
+                Mathf.Max(0, thrownShield.m_variant));
+        }
+        catch (Exception exception)
+        {
+            // A visual failure must never enter the shield cargo/drop recovery path.
+            ReportShieldVisualFailure(exception);
+        }
+    }
+
+    private static void ReportShieldVisualFailure(Exception exception)
+    {
+        if (SecondaryAttackManager.TryMarkCompatibilityWarningReported("shield_projectile_appearance_failed"))
+            CaptainValheimPlugin.ModLogger.LogWarning($"Could not apply thrown shield appearance: {exception.Message}");
+    }
+
+    private sealed class ShieldProjectileVisualState
+    {
+        private bool _applied;
+        private long _appearance;
+        private bool _failed;
+        internal GameObject? Visual;
+        internal int FallbackVariant;
+
+        internal bool ShouldApply(long appearance, bool visualIntact) =>
+            !_applied || _appearance != appearance || (!visualIntact && !_failed);
+
+        internal void MarkApplied(long appearance)
+        {
+            _appearance = appearance;
+            _applied = true;
+            _failed = false;
         }
 
-        GameObject? attachPrefab = ResolveAttachGameObject(thrownShield.m_dropPrefab);
-        ApplyShieldProjectileCachedVisual(projectile, thrownShield, attachPrefab);
+        internal void MarkFailed(long appearance)
+        {
+            MarkApplied(appearance);
+            _failed = true;
+        }
+    }
+
+    private static void ApplyShieldProjectileAppearance(Projectile projectile, ShieldProjectileVisualState state,
+        long packed, string fallbackName, int fallbackVariant)
+    {
+        if (ObjectDB.instance == null) return;
+        GameObject? fallbackPrefab = ObjectDB.instance.GetItemPrefab(fallbackName);
+        GameObject? attachPrefab = null;
+        int variant = fallbackVariant;
+        if (ShieldProjectileAppearance.TryUnpack(packed, out ShieldProjectileAppearance appearance))
+        {
+            GameObject? cosmeticPrefab = ObjectDB.instance.GetItemPrefab(appearance.PrefabHash);
+            if (cosmeticPrefab != null && cosmeticPrefab.GetComponent<ItemDrop>() != null)
+            {
+                attachPrefab = ResolveAttachGameObject(cosmeticPrefab);
+                if (attachPrefab != null) variant = appearance.Variant;
+            }
+        }
+        if (attachPrefab == null) attachPrefab = ResolveAttachGameObject(fallbackPrefab!);
+
+        GameObject? oldOwnedVisual = state.Visual;
+        GameObject visual;
+        try
+        {
+            visual = CreateShieldProjectileVisual(projectile, attachPrefab, variant);
+        }
+        catch (Exception exception)
+        {
+            ReportShieldVisualFailure(exception);
+            // If only a cosmetic asset is broken, still display the actual shield.
+            visual = CreateShieldProjectileVisual(projectile, ResolveAttachGameObject(fallbackPrefab!), fallbackVariant);
+        }
+        if (state.Visual == null) HideShieldProjectileSourcePresentation(projectile, preserve: visual);
+        if (projectile.m_visual != null && projectile.m_visual != visual) projectile.m_visual.SetActive(false);
+        projectile.m_visual = visual;
+        state.Visual = visual;
+        state.FallbackVariant = fallbackVariant;
+        state.MarkApplied(packed);
+        GameAccess.ChangedVisual(projectile) = true;
+        ThrowProjectileVisualSpin.Ensure(visual);
+        if (oldOwnedVisual != null && oldOwnedVisual != visual) Object.Destroy(oldOwnedVisual);
     }
 
     private static GameObject? ResolveAttachGameObject(GameObject itemPrefab)
@@ -848,12 +991,11 @@ internal static partial class ShieldRuntimeSystem
         return attachObject != null ? attachObject.gameObject : attach.gameObject;
     }
 
-    private static void ApplyShieldProjectileCachedVisual(
+    private static GameObject CreateShieldProjectileVisual(
         Projectile projectile,
-        ItemDrop.ItemData thrownShield,
-        GameObject? attachPrefab)
+        GameObject? attachPrefab,
+        int variant)
     {
-        GameObject? previousVisual = projectile.m_visual;
         GameObject visual;
         if (attachPrefab != null)
         {
@@ -871,15 +1013,16 @@ internal static partial class ShieldRuntimeSystem
 
         visual.transform.localPosition = Vector3.zero;
         visual.transform.localRotation = Quaternion.identity;
-        if (previousVisual != null && previousVisual != visual)
+        try
         {
-            previousVisual.SetActive(false);
+            GameAccess.SetupEquipmentVisual(visual, variant);
         }
-
-        GameAccess.SetupEquipmentVisual(visual, thrownShield.m_variant);
-        projectile.m_visual = visual;
-
-        ThrowProjectileVisualSpin.Ensure(projectile.m_visual);
+        catch
+        {
+            Object.Destroy(visual);
+            throw;
+        }
+        return visual;
     }
 
     private static void PlayShieldProjectileImpactSound(Vector3 position)
@@ -1026,6 +1169,7 @@ internal static partial class ShieldRuntimeSystem
         private Projectile _projectile = null!;
         private ItemDrop.ItemData _thrownShield = null!;
         private long _throwerPlayerId;
+        private ShieldProjectileAppearance _appearance;
         private HashSet<Character> _hitTargets = null!;
         private float _searchRadius;
         private float _speed;
@@ -1045,6 +1189,7 @@ internal static partial class ShieldRuntimeSystem
             Projectile projectile,
             ItemDrop.ItemData thrownShield,
             long throwerPlayerId,
+            ShieldProjectileAppearance appearance,
             int remainingChains,
             float searchRadius,
             float speed,
@@ -1058,6 +1203,7 @@ internal static partial class ShieldRuntimeSystem
             _projectile = projectile;
             _thrownShield = thrownShield;
             _throwerPlayerId = throwerPlayerId;
+            _appearance = appearance;
             _remainingChains = Mathf.Max(0, remainingChains);
             _searchRadius = searchRadius;
             _speed = speed;
@@ -1226,6 +1372,7 @@ internal static partial class ShieldRuntimeSystem
                     nextLaunchData,
                     _thrownShield,
                     _throwerPlayerId,
+                    _appearance,
                     ResolveShieldRedirectSpawnPoint(hitPoint, normal, direction),
                     direction,
                     Mathf.Max(0f, damage),
@@ -1448,6 +1595,7 @@ internal static partial class ShieldRuntimeSystem
                     returnLaunchData,
                     _thrownShield,
                     _throwerPlayerId,
+                    _appearance,
                     ResolveShieldRedirectSpawnPoint(hitPoint, normal, direction),
                     direction,
                     0f,

@@ -10,14 +10,9 @@ namespace CaptainValheim;
 [HarmonyPatch(typeof(Projectile), "UpdateVisual")]
 internal static class ProjectileUpdateVisualPatch
 {
-    private static void Prefix(Projectile __instance)
+    private static bool Prefix(Projectile __instance)
     {
-        ShieldRuntimeSystem.PrepareShieldThrowProjectileIfNeeded(__instance);
-    }
-
-    private static void Postfix(Projectile __instance)
-    {
-        ShieldRuntimeSystem.EnsureShieldThrowProjectileVisualSpinIfNeeded(__instance);
+        return !ShieldRuntimeSystem.TryUpdateShieldThrowProjectileVisual(__instance);
     }
 }
 
