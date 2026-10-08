@@ -201,9 +201,10 @@ internal static class HumanoidGetCurrentWeaponPatch
 [HarmonyPatch(typeof(Humanoid), nameof(Humanoid.Pickup))]
 internal static class HumanoidPickupThrownShieldPatch
 {
-    private static void Prefix(Humanoid __instance, GameObject go, ref ItemDrop.ItemData __state)
+    private static void Prefix(Humanoid __instance, GameObject go, ref bool autoequip, ref ItemDrop.ItemData __state)
     {
         __state = null!;
+        autoequip = ShieldPickupPolicy.FilterAutoEquip(__instance, go, autoequip);
         if (ShieldRuntimeSystem.CanQueueReturnedShieldAutoEquip(__instance))
         {
             ShieldRuntimeSystem.TryGetAutoEquipThrownShieldState(go, out __state);

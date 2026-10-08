@@ -12,7 +12,7 @@ namespace CaptainValheim;
 public class CaptainValheimPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CaptainValheim";
-    internal const string ModVersion = "1.0.13";
+    internal const string ModVersion = "1.1.0";
     internal const string Author = "sighsorry";
     private const string ModGUID = $"{Author}.{ModName}";
     private static string ConfigFileName = $"{ModGUID}.cfg";
@@ -68,6 +68,7 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         RunCleanup("configuration watcher", DisposeWatcher);
         RunCleanup("shield key hints", ShieldOnlyKeyHintSystem.Dispose);
         RunCleanup("shield compendium", ShieldTechniqueCompendiumManager.Dispose);
+        RunCleanup("pickup scopes", ShieldPickupPolicy.Reset);
         RunCleanup("Harmony patches", _harmony.UnpatchSelf);
     }
 
@@ -223,12 +224,15 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     {
         internal ConfigEntry<Toggle> LockConfiguration = null!;
         internal ConfigEntry<Toggle> ShowShieldTooltip = null!;
+        internal ConfigEntry<Toggle> PreventWeaponAutoEquip = null!;
 
         internal void Bind(CaptainValheimPlugin plugin)
         {
             const string group = "1 - General";
             LockConfiguration = plugin.config(group, "Lock Configuration", Toggle.On, "If on, the configuration is locked and can be changed by server admins only.");
             ShowShieldTooltip = plugin.config(group, "Show Shield Tooltip", Toggle.On, "Shows CaptainValheim guidance on shield item tooltips.", synchronizedSetting: false);
+            PreventWeaponAutoEquip = plugin.config(group, "Prevent Weapon Auto Equip While Shield Only", Toggle.On,
+                "Keeps automatically picked up weapons in the inventory while using only a shield, including while waiting for a thrown shield to return. Identified weapons thrown by you retain the game's normal re-equip checks. Manual pickup and equipment choices are unchanged.", synchronizedSetting: false);
         }
     }
 

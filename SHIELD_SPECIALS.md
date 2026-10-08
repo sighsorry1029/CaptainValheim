@@ -83,6 +83,12 @@ Configured shield features apply when:
 - `throw.damageDecay` reduces damage after each enemy target hit as `nextDamage *= (1 - damageDecay)`.
 - `blockCharge.enabled: true` enables Valheim's vanilla block-charge counterattack while keeping the prefab's own vanilla count and decay values; inherited `Global`/built-in shield defaults do the same
 
+### Pickup Auto-Equip
+
+The client-only `1 - General` option `Prevent Weapon Auto Equip While Shield Only` defaults to `On`. During automatic pickup, an equipped left-hand shield with all other active/sheathed hands empty is protected from newly collected weapons taking over the hands. An active thrown-shield return intent also protects empty hands. Pickup itself and inventory capacity rules remain unchanged; manual pickups, manual equipment choices and ordinary weapon loadouts keep their existing behavior.
+
+Recoverable projectile drops carry a thrower marker so your own thrown spear or weapon can still use the game's normal auto-equip rules. A new spear or another player's marked weapon does not qualify. Existing FearNoSpear and SecondaryAttacks dropped-item thrower markers are also recognized. Markers belong to the world drop and are not added to inventory item custom data. Unmarked drops from earlier throws or custom throw systems are treated as ordinary loot while protection is active. Disabling the option restores normal pickup auto-equipping; it does not disable shield returns.
+
 ### One-Handed Weapon Options
 
 The following settings are in the BepInEx config section `2 - Shield Actions With One-Handed Weapon`, are synchronized by ServerSync, and follow the server's configuration lock:
@@ -147,6 +153,15 @@ Each option grants permission to use its feature with a one-handed melee weapon 
 - `baseBlockPower = weapon.GetBaseBlockPower()`
 - `deflectionForce = weapon.GetDeflectionForce()`
 
+Only primary attacks, throws and Shield Charge adjust deflection for their push calculation:
+
+```text
+F = max(0, deflectionForce)
+attackPushBase = F <= 15 ? F : sqrt(15 * F)
+```
+
+Existing YAML `pushFactor` numbers are preserved and now multiply `attackPushBase`. For example, deflection 20 gives about 17.32 before the multiplier, while 100 gives 38.73 and 150 gives 47.43. This is an attack-force adjustment, not a guaranteed knockback-distance ratio: the target's mass, equipment, movement and collisions also affect displacement. Throw search radius and TTL, charge hit radius, reflection, normal blocking and vanilla Block Charge continue using their existing inputs and formulas.
+
 ### Primary Attack
 
 Damage:
@@ -158,7 +173,7 @@ damage = blockPower * primaryAttack.damageFactor
 Push:
 
 ```text
-push = deflectionForce * primaryAttack.pushFactor
+push = max(0, attackPushBase * primaryAttack.pushFactor)
 ```
 
 Hit shape:
@@ -184,7 +199,7 @@ damage = blockPower * throw.damageFactor
 Push:
 
 ```text
-push = deflectionForce * throw.pushFactor
+push = max(0, attackPushBase * throw.pushFactor)
 ```
 
 Ricochet search radius:
@@ -224,7 +239,7 @@ damage = blockPower * charge.damageFactor
 Push:
 
 ```text
-push = deflectionForce * charge.pushFactor
+push = max(0, attackPushBase * charge.pushFactor)
 ```
 
 Travel distance:

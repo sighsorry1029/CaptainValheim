@@ -141,6 +141,7 @@
         <Compile Include="SecondaryAttackWorldApplySystem.cs" />
         <Compile Include="WarfareTweaksBridge.cs" />
         <Compile Include="ShieldRuntimeSystem.cs" />
+        <Compile Include="ShieldPickupPolicy.cs" />
     </ItemGroup>
     <ItemGroup>
         <Content Include=".gitignore"/>

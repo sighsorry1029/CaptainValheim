@@ -138,6 +138,10 @@ int keyHintAssertions = 0;
 int keyHintContractAssertions = 0;
 int projectileAppearanceAssertions = 0;
 int projectileAppearanceContracts = 0;
+int shieldAttackPushAssertions = 0;
+int shieldAttackPushContracts = 0;
+int shieldPickupPolicyAssertions = 0;
+int shieldPickupPolicyContracts = 0;
 if (errors.Count == 0)
 {
     try
@@ -147,16 +151,20 @@ if (errors.Count == 0)
         returnedShieldContractAssertions = ReturnedShieldTests.CheckContract(mod);
         keyHintContractAssertions = KeyHintPolicyTests.CheckContract(mod, game);
         projectileAppearanceContracts = ProjectileAppearanceTests.CheckContract(mod);
-        (protocolAssertions, equipmentPolicyAssertions, returnedShieldAssertions, keyHintAssertions, projectileAppearanceAssertions) =
+        shieldAttackPushContracts = ShieldAttackPushTests.CheckContract(mod);
+        shieldPickupPolicyContracts = ShieldPickupPolicyTests.CheckContract(mod);
+        (protocolAssertions, equipmentPolicyAssertions, returnedShieldAssertions, keyHintAssertions, projectileAppearanceAssertions, shieldAttackPushAssertions, shieldPickupPolicyAssertions) =
             ManagedProtocolTests.Run(args[0], args[1], args[2]);
     }
     catch (Exception e) { errors.Add("Isolated managed/contract test failed: " + e); }
 }
-File.WriteAllText(args[3], JsonSerializer.Serialize(new { mod = Path.GetFullPath(args[0]), managed = Path.GetFullPath(args[1]), members, patches, reflected, protocolAssertions, equipmentPolicyAssertions, transpilerContractAssertions, configurationAssertions, returnedShieldAssertions, returnedShieldContractAssertions, keyHintAssertions, keyHintContractAssertions, projectileAppearanceAssertions, projectileAppearanceContracts, errors }, new JsonSerializerOptions { WriteIndented = true }));
+File.WriteAllText(args[3], JsonSerializer.Serialize(new { mod = Path.GetFullPath(args[0]), managed = Path.GetFullPath(args[1]), members, patches, reflected, protocolAssertions, equipmentPolicyAssertions, transpilerContractAssertions, configurationAssertions, returnedShieldAssertions, returnedShieldContractAssertions, keyHintAssertions, keyHintContractAssertions, projectileAppearanceAssertions, projectileAppearanceContracts, shieldAttackPushAssertions, shieldAttackPushContracts, shieldPickupPolicyAssertions, shieldPickupPolicyContracts, errors }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine($"Game references: {members.Count}; Harmony targets: {patches.Count}; reflection contracts: {reflected.Count}; errors: {errors.Count}");
 Console.WriteLine($"Managed protocol assertions: {protocolAssertions} (no Unity/Harmony/network execution)");
 Console.WriteLine($"Equipment/input assertions: {equipmentPolicyAssertions}; static transpiler contracts: {transpilerContractAssertions}; synchronized config contracts: {configurationAssertions} (no transpiler/patch installation or Unity gameplay execution)");
 Console.WriteLine($"Return intent assertions: {returnedShieldAssertions}; return contracts: {returnedShieldContractAssertions}; key hint policy assertions: {keyHintAssertions}; key hint contracts: {keyHintContractAssertions} (isolated managed/static only)");
 Console.WriteLine($"Projectile appearance assertions: {projectileAppearanceAssertions}; contracts: {projectileAppearanceContracts} (actual snapshot and refresh policy; no Unity/network execution)");
+Console.WriteLine($"Shield attack push assertions: {shieldAttackPushAssertions}; contracts: {shieldAttackPushContracts} (actual numeric helper and three call sites; no gameplay displacement test)");
+Console.WriteLine($"Shield pickup policy assertions: {shieldPickupPolicyAssertions}; contracts: {shieldPickupPolicyContracts} (managed scopes and ZDO metadata; no Unity pickup/ownership execution)");
 foreach (var error in errors) Console.WriteLine(error);
 return errors.Count == 0 ? 0 : 1;

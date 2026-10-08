@@ -58,6 +58,8 @@ CaptainValheim creates:
 
 `Show Shield Tooltip` in the BepInEx config controls the extra CaptainValheim guidance appended to shield item tooltips. It defaults to `On` and is a client-only display setting that is not synchronized with the server.
 
+`Prevent Weapon Auto Equip While Shield Only` also defaults to `On` and is client-only. Automatically collected weapons stay in your inventory instead of changing your hands while you hold only a shield, or while a thrown shield is waiting to return to empty hands. Your own marked thrown weapons, including spears, retain the game's normal automatic re-equip opportunity; a newly found spear has no special exemption. Unmarked drops from earlier throws or custom throw systems are treated as ordinary loot. Manual pickups and equipment choices remain available. Set this option to `Off` to keep the game's usual pickup auto-equipping.
+
 The `2 - Shield Actions With One-Handed Weapon` section contains three ServerSync settings. These follow the server's `Lock Configuration` setting:
 
 | Setting | Default | When enabled |
@@ -71,6 +73,8 @@ The `2 - Shield Actions With One-Handed Weapon` section contains three ServerSyn
 When charge is allowed for the equipped shield and weapon, Block + Secondary Attack is reserved for shield charge. If a cooldown, stamina shortage, or another start condition prevents charging, the input does not fall through to the weapon's secondary attack. Without Block, the weapon's secondary attack remains available. Shield strikes and throws still require an empty right hand. Equipping an item that disallows block charge, or disabling block charge, clears any stored charges.
 
 The root `Global` block defines fallback behavior for all shields. Any shield prefab listed below `Global` inherits those defaults and only overrides the fields you write.
+
+Primary strikes, throws and Shield Charge soften high shield deflection before applying `pushFactor`: let `F = max(0, deflectionForce)`; use `F` up to 15, otherwise `sqrt(15 * F)`. Existing YAML values are kept and multiply this adjusted force. This reduces tower-shield attack push more than lower-force shields; actual knockback distance also depends on the target and terrain. Throw radius/lifetime, charge hit radius, projectile reflection, normal blocking and Block Charge keep their existing formulas.
 
 Example:
 

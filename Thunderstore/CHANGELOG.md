@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.0
+
+- Rebalanced primary strikes, shield throws, and Shield Charge to reduce high-deflection shields' attack push more strongly while retaining a larger share of lower-force shields' push. Existing YAML `pushFactor` settings now multiply the adjusted force; damage, attack ranges, normal blocking, projectile reflection, and Block Charge keep their existing formulas.
+- Added the default-On, client-only `Prevent Weapon Auto Equip While Shield Only` option. Automatically collected weapons stay in the inventory while using only a shield or waiting for a thrown shield to return to empty hands.
+- Identified weapons thrown by you retain the game's normal automatic re-equip checks. Existing FearNoSpear and SecondaryAttacks drop markers are recognized; newly found weapons and unmarked drops receive no recovery exception.
+- Manual pickup, equipment choices, inventory capacity checks, and existing shield returns remain unchanged. Recovery markers stay on world drops rather than inventory item data.
+- Update CaptainValheim on the server and participating clients together to satisfy the existing version check.
+
 ## 1.0.13
 
 - Thrown shields now retain their equipped appearance and style, including appearances applied by Armoire, through ricochets and the return flight.

@@ -409,6 +409,17 @@ internal static partial class ShieldRuntimeSystem
         }
     }
 
+    internal static float CalculateShieldAttackPushForce(float deflectionForce, float pushFactor)
+    {
+        const float unscaledForceLimit = 15f;
+        float force = Mathf.Max(0f, deflectionForce);
+        // Compress high shield forces for attacks without changing their blocking or range stats.
+        float adjustedForce = force <= unscaledForceLimit
+            ? force
+            : (float)Math.Sqrt((double)unscaledForceLimit * force);
+        return Mathf.Max(0f, adjustedForce * pushFactor);
+    }
+
     internal static void BeginShieldPrimaryVanillaTrigger(
         Attack attack,
         ActiveSecondaryAttack activeAttack,
@@ -425,7 +436,7 @@ internal static partial class ShieldRuntimeSystem
         activeAttack.Triggered = true;
         float expectedSkillFactor = ResolveExpectedVanillaShieldPrimarySkillFactor(attack);
         float baseDamage = Mathf.Max(0f, GetShieldBlockPower(attack) * behavior.ShieldPrimaryAttackDamageFactor);
-        float basePush = Mathf.Max(0f, attack.GetWeapon().GetDeflectionForce() * behavior.ShieldPrimaryAttackPushFactor);
+        float basePush = CalculateShieldAttackPushForce(attack.GetWeapon().GetDeflectionForce(), behavior.ShieldPrimaryAttackPushFactor);
         if (expectedSkillFactor > 0.001f)
         {
             baseDamage /= expectedSkillFactor;

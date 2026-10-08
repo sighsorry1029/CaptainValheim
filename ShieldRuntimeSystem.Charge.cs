@@ -116,7 +116,7 @@ internal static partial class ShieldRuntimeSystem
         float deflectionForce = attack.GetWeapon().GetDeflectionForce();
         float distance = Mathf.Max(0f, behavior.ShieldChargeDistance);
         float damage = Mathf.Max(0f, GetShieldBlockPower(attack) * behavior.ShieldChargeDamageFactor);
-        float pushForce = Mathf.Max(0f, deflectionForce * behavior.ShieldChargePushFactor);
+        float pushForce = CalculateShieldAttackPushForce(deflectionForce, behavior.ShieldChargePushFactor);
         float hitRadius = CalculateShieldChargeHitRadius(deflectionForce, behavior.ShieldChargeHitRadiusFactor);
         float cooldown = CalculateShieldChargeCooldown(attack.GetCharacter(), behavior);
         float staminaCost = attack.GetAttackStamina();

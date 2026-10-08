@@ -146,6 +146,11 @@ internal static partial class ShieldRuntimeSystem
         humanoid.LeftItem == null && humanoid.RightItem == null &&
         GameAccess.HiddenLeftItem(humanoid) == null && GameAccess.HiddenRightItem(humanoid) == null;
 
+    internal static bool HasPendingShieldReturn(Humanoid humanoid) =>
+        CanQueueReturnedShieldAutoEquip(humanoid) &&
+        ReturnedShieldEquipStates.TryGetValue(humanoid, out ReturnedShieldEquipState? state) &&
+        (!state.IsReturned || humanoid.GetInventory().ContainsItem(state.Shield));
+
     private static void BeginReturnedShieldEquipIntent(Humanoid humanoid, ItemDrop.ItemData shield, bool returned)
     {
         if (!CanQueueReturnedShieldAutoEquip(humanoid) || shield == null || shield.m_equipped ||
@@ -199,7 +204,7 @@ internal static partial class ShieldRuntimeSystem
         float blockPower = GetShieldBlockPower(attack);
         float deflectionForce = attack.GetWeapon().GetDeflectionForce();
         float damage = Mathf.Max(0f, blockPower * behavior.ShieldThrowDamageFactor);
-        float pushForce = Mathf.Max(0f, deflectionForce * behavior.ShieldThrowPushFactor);
+        float pushForce = CalculateShieldAttackPushForce(deflectionForce, behavior.ShieldThrowPushFactor);
         float searchRadius = CalculateShieldThrowSearchRadius(deflectionForce, behavior.ShieldThrowRadiusFactor);
         float ttl = CalculateShieldThrowTtl(deflectionForce, behavior.ShieldThrowTtlFactor);
         float speed = CalculateShieldThrowProjectileSpeed(launchData);
