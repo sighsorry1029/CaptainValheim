@@ -142,6 +142,14 @@ internal static partial class SecondaryAttackManager
         public HitData? Hit { get; set; }
 
         public float BlockedDamage { get; set; }
+
+        public bool BlockCompleted { get; set; }
+
+        public bool BlockSucceeded { get; set; }
+
+        public float ActualBlockStaminaCost { get; set; }
+
+        public bool PathOfValheimanReflected { get; set; }
     }
 
     internal struct ShieldReflectCharacterDamageState
@@ -398,25 +406,24 @@ internal static partial class SecondaryAttackManager
         HitData hit,
         ItemDrop.ItemData blocker)
     {
-        if (humanoid is not Player player || blocker == null || hit == null)
+        if (humanoid is not Player player || hit == null)
         {
             return null;
         }
 
-        if (!ShieldRuntimeSystem.IsShieldFeatureAllowed(
+        bool eligible = blocker != null && ShieldRuntimeSystem.IsShieldFeatureAllowed(
                 player,
                 blocker,
-                CaptainValheimPlugin.Settings.WeaponCompatibility.AllowReflection.Value))
+                CaptainValheimPlugin.Settings.WeaponCompatibility.AllowReflection.Value);
+        SecondaryAttackDefinition? definition = null;
+        eligible = eligible && ShieldRuntimeSystem.TryGetDefinition(blocker!, out definition) && definition.ShieldProjectileReflect;
+        if (!eligible && (!PathOfValheimanReflectionBridge.Enabled || !ReferenceEquals(player, Player.m_localPlayer)))
         {
             return null;
         }
 
-        if (!ShieldRuntimeSystem.TryGetDefinition(blocker, out SecondaryAttackDefinition definition) ||
-            !definition.ShieldProjectileReflect)
-        {
-            return null;
-        }
-
+        // While PoV is observed, even a nested local block which cannot reflect
+        // needs a sentinel. Its launch must never mark the enclosing block as done.
         BlockAttackContext context = new();
         context.Player = player;
         context.Blocker = blocker;
@@ -424,7 +431,7 @@ internal static partial class SecondaryAttackManager
         context.StaminaBefore = player.GetStamina();
         context.Hit = hit;
 
-        if (TryPeekShieldReflectContext(
+        if (eligible && TryPeekShieldReflectContext(
                 player,
                 hit,
                 out ShieldReflectProjectileContext projectileContext))
@@ -435,6 +442,32 @@ internal static partial class SecondaryAttackManager
         ActiveShieldReflectBlockAttackContexts.Add(context);
 
         return context;
+    }
+
+    internal static void RecordCompletedBlockAttack(bool result, HitData hit, BlockAttackContext? context)
+    {
+        if (context?.Player == null || !ReferenceEquals(context.Hit, hit))
+        {
+            return;
+        }
+
+        context.BlockCompleted = true;
+        context.BlockSucceeded = result;
+        context.ActualBlockStaminaCost = Mathf.Max(0f, context.StaminaBefore - context.Player.GetStamina());
+    }
+
+    internal static void RecordPathOfValheimanReflection(Character owner)
+    {
+        if (ActiveShieldReflectBlockAttackContexts.Count == 0)
+        {
+            return;
+        }
+
+        BlockAttackContext context = ActiveShieldReflectBlockAttackContexts[ActiveShieldReflectBlockAttackContexts.Count - 1];
+        if (context.BlockCompleted && context.BlockSucceeded && ReferenceEquals(context.Player, owner))
+        {
+            context.PathOfValheimanReflected = true;
+        }
     }
 
     internal static void RecordShieldReflectBlockDamage(
@@ -531,7 +564,8 @@ internal static partial class SecondaryAttackManager
             context.Player == null ||
             context.Blocker == null ||
             context.Definition == null ||
-            !context.ProjectileContext.HasValue)
+            !context.ProjectileContext.HasValue ||
+            context.PathOfValheimanReflected)
         {
             return;
         }
@@ -542,7 +576,9 @@ internal static partial class SecondaryAttackManager
             return;
         }
 
-        float actualBlockStaminaCost = Mathf.Max(0f, context.StaminaBefore - player.GetStamina());
+        float actualBlockStaminaCost = context.BlockCompleted
+            ? context.ActualBlockStaminaCost
+            : Mathf.Max(0f, context.StaminaBefore - player.GetStamina());
         FinalizeShieldReflect(
             player,
             context.Blocker,

@@ -3,16 +3,18 @@ using System.IO;
 using BepInEx;
 using BepInEx.Configuration;
 using BepInEx.Logging;
+using BepInEx.Bootstrap;
 using HarmonyLib;
 using ServerSync;
 
 namespace CaptainValheim;
 
 [BepInPlugin(ModGUID, ModName, ModVersion)]
+[BepInDependency("treextr.pathofvalheiman", BepInDependency.DependencyFlags.SoftDependency)]
 public class CaptainValheimPlugin : BaseUnityPlugin
 {
     internal const string ModName = "CaptainValheim";
-    internal const string ModVersion = "1.1.0";
+    internal const string ModVersion = "1.1.1";
     internal const string Author = "sighsorry";
     private const string ModGUID = $"{Author}.{ModName}";
     private static string ConfigFileName = $"{ModGUID}.cfg";
@@ -70,6 +72,8 @@ public class CaptainValheimPlugin : BaseUnityPlugin
         RunCleanup("shield compendium", ShieldTechniqueCompendiumManager.Dispose);
         RunCleanup("pickup scopes", ShieldPickupPolicy.Reset);
         RunCleanup("Harmony patches", _harmony.UnpatchSelf);
+        RunCleanup("Path of Valheiman actions", PathOfValheimanBridge.Dispose);
+        RunCleanup("Path of Valheiman reflection", PathOfValheimanReflectionBridge.Dispose);
     }
 
     private static void RunCleanup(string operation, Action cleanup)
@@ -188,6 +192,13 @@ public class CaptainValheimPlugin : BaseUnityPlugin
     private void PatchCaptainValheimHooks()
     {
         _harmony.PatchAll(typeof(CaptainValheimPlugin).Assembly);
+        if (Chainloader.PluginInfos.TryGetValue("treextr.pathofvalheiman", out PluginInfo plugin) &&
+            plugin.Instance != null)
+        {
+            System.Reflection.Assembly assembly = plugin.Instance.GetType().Assembly;
+            PathOfValheimanBridge.Initialize(_harmony, assembly);
+            PathOfValheimanReflectionBridge.Initialize(_harmony, assembly);
+        }
     }
 
     internal sealed class PluginSettings

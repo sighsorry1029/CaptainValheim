@@ -3,8 +3,8 @@ using Mono.Cecil.Cil;
 using System.Text.Json;
 
 // Static contract check against ORIGINAL target DLLs. Does not load Unity or install patches.
-if (args.Length != 4)
-    throw new ArgumentException("Usage: <merged mod.dll> <original Managed directory> <BepInEx/core directory> <report.json>");
+if (args.Length is < 4 or > 5)
+    throw new ArgumentException("Usage: <merged mod.dll> <original Managed directory> <BepInEx/core directory> <report.json> [original PathOfValheiman.dll]");
 using var resolver = new DefaultAssemblyResolver();
 resolver.AddSearchDirectory(Path.GetFullPath(args[1]));
 resolver.AddSearchDirectory(Path.GetFullPath(args[2]));
@@ -142,6 +142,15 @@ int shieldAttackPushAssertions = 0;
 int shieldAttackPushContracts = 0;
 int shieldPickupPolicyAssertions = 0;
 int shieldPickupPolicyContracts = 0;
+int pathOfValheimanOriginalAssertions = 0;
+int pathOfValheimanAssertions = 0;
+int pathOfValheimanContracts = 0;
+string[] pathOfValheimanOriginalContracts = [];
+if (args.Length == 5)
+{
+    try { (pathOfValheimanOriginalAssertions, pathOfValheimanOriginalContracts) = PathOfValheimanCompatibilityTests.CheckExternal(args[4]); }
+    catch (Exception e) { errors.Add("Optional PathOfValheiman original DLL contract failed: " + e); }
+}
 if (errors.Count == 0)
 {
     try
@@ -153,12 +162,13 @@ if (errors.Count == 0)
         projectileAppearanceContracts = ProjectileAppearanceTests.CheckContract(mod);
         shieldAttackPushContracts = ShieldAttackPushTests.CheckContract(mod);
         shieldPickupPolicyContracts = ShieldPickupPolicyTests.CheckContract(mod);
-        (protocolAssertions, equipmentPolicyAssertions, returnedShieldAssertions, keyHintAssertions, projectileAppearanceAssertions, shieldAttackPushAssertions, shieldPickupPolicyAssertions) =
-            ManagedProtocolTests.Run(args[0], args[1], args[2]);
+        pathOfValheimanContracts = PathOfValheimanCompatibilityTests.CheckContract(mod);
+        (protocolAssertions, equipmentPolicyAssertions, returnedShieldAssertions, keyHintAssertions, projectileAppearanceAssertions, shieldAttackPushAssertions, shieldPickupPolicyAssertions, pathOfValheimanAssertions) =
+            ManagedProtocolTests.Run(args[0], args[1], args[2], args.Length == 5 ? args[4] : null);
     }
     catch (Exception e) { errors.Add("Isolated managed/contract test failed: " + e); }
 }
-File.WriteAllText(args[3], JsonSerializer.Serialize(new { mod = Path.GetFullPath(args[0]), managed = Path.GetFullPath(args[1]), members, patches, reflected, protocolAssertions, equipmentPolicyAssertions, transpilerContractAssertions, configurationAssertions, returnedShieldAssertions, returnedShieldContractAssertions, keyHintAssertions, keyHintContractAssertions, projectileAppearanceAssertions, projectileAppearanceContracts, shieldAttackPushAssertions, shieldAttackPushContracts, shieldPickupPolicyAssertions, shieldPickupPolicyContracts, errors }, new JsonSerializerOptions { WriteIndented = true }));
+File.WriteAllText(args[3], JsonSerializer.Serialize(new { mod = Path.GetFullPath(args[0]), managed = Path.GetFullPath(args[1]), members, patches, reflected, protocolAssertions, equipmentPolicyAssertions, transpilerContractAssertions, configurationAssertions, returnedShieldAssertions, returnedShieldContractAssertions, keyHintAssertions, keyHintContractAssertions, projectileAppearanceAssertions, projectileAppearanceContracts, shieldAttackPushAssertions, shieldAttackPushContracts, shieldPickupPolicyAssertions, shieldPickupPolicyContracts, pathOfValheimanAssertions, pathOfValheimanContracts, pathOfValheimanOriginal = args.Length == 5 ? Path.GetFullPath(args[4]) : null, pathOfValheimanOriginalAssertions, pathOfValheimanOriginalContracts, errors }, new JsonSerializerOptions { WriteIndented = true }));
 Console.WriteLine($"Game references: {members.Count}; Harmony targets: {patches.Count}; reflection contracts: {reflected.Count}; errors: {errors.Count}");
 Console.WriteLine($"Managed protocol assertions: {protocolAssertions} (no Unity/Harmony/network execution)");
 Console.WriteLine($"Equipment/input assertions: {equipmentPolicyAssertions}; static transpiler contracts: {transpilerContractAssertions}; synchronized config contracts: {configurationAssertions} (no transpiler/patch installation or Unity gameplay execution)");
@@ -166,5 +176,7 @@ Console.WriteLine($"Return intent assertions: {returnedShieldAssertions}; return
 Console.WriteLine($"Projectile appearance assertions: {projectileAppearanceAssertions}; contracts: {projectileAppearanceContracts} (actual snapshot and refresh policy; no Unity/network execution)");
 Console.WriteLine($"Shield attack push assertions: {shieldAttackPushAssertions}; contracts: {shieldAttackPushContracts} (actual numeric helper and three call sites; no gameplay displacement test)");
 Console.WriteLine($"Shield pickup policy assertions: {shieldPickupPolicyAssertions}; contracts: {shieldPickupPolicyContracts} (managed scopes and ZDO metadata; no Unity pickup/ownership execution)");
+Console.WriteLine($"PathOfValheiman original DLL contracts: {pathOfValheimanOriginalAssertions} ({(args.Length == 5 ? "optional original metadata inspected" : "not supplied")})");
+Console.WriteLine($"PathOfValheiman managed assertions: {pathOfValheimanAssertions}; integration contracts: {pathOfValheimanContracts} (callback cleanup and instruction rewriting; original private binding only when supplied; no PoV gameplay, Unity or Harmony installation)");
 foreach (var error in errors) Console.WriteLine(error);
 return errors.Count == 0 ? 0 : 1;

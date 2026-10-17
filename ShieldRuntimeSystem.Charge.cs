@@ -24,7 +24,8 @@ internal static partial class ShieldRuntimeSystem
 
     internal static bool CanStartShieldCharge(Humanoid humanoid)
     {
-        if (humanoid == null || IsShieldChargeActive(humanoid) || humanoid.IsDead() ||
+        if (humanoid == null || IsShieldChargeActive(humanoid) ||
+            PathOfValheimanBridge.BlocksCaptainCharge(humanoid) || humanoid.IsDead() ||
             humanoid.InAttack() || humanoid.InDodge() || !humanoid.CanMove() ||
             humanoid.IsKnockedBack() || humanoid.IsStaggering() || humanoid.InMinorAction())
         {

@@ -7,7 +7,7 @@ internal static class ManagedProtocolTests
 
     // Runs actual mod/game managed codec methods, without substituting/publicizing the
     // game DLL. This .NET host does not validate Unity native code, Harmony or networking.
-    internal static (int Protocol, int EquipmentPolicy, int ReturnedShield, int KeyHintPolicy, int ProjectileAppearance, int ShieldAttackPush, int ShieldPickupPolicy) Run(string modPath, string managed, string core)
+    internal static (int Protocol, int EquipmentPolicy, int ReturnedShield, int KeyHintPolicy, int ProjectileAppearance, int ShieldAttackPush, int ShieldPickupPolicy, int PathOfValheiman) Run(string modPath, string managed, string core, string? originalPathOfValheiman = null)
     {
         Assembly? Resolve(AssemblyLoadContext context, AssemblyName name)
         {
@@ -90,7 +90,8 @@ internal static class ManagedProtocolTests
             int appearanceAssertions = ProjectileAppearanceTests.Run(game, mod);
             int shieldAttackPushAssertions = ShieldAttackPushTests.Run(mod);
             int shieldPickupAssertions = ShieldPickupPolicyTests.Run(game, mod);
-            return (assertions, equipmentAssertions, returnedShieldAssertions, keyHintAssertions, appearanceAssertions, shieldAttackPushAssertions, shieldPickupAssertions);
+            int pathOfValheimanAssertions = PathOfValheimanCompatibilityTests.Run(game, mod, originalPathOfValheiman);
+            return (assertions, equipmentAssertions, returnedShieldAssertions, keyHintAssertions, appearanceAssertions, shieldAttackPushAssertions, shieldPickupAssertions, pathOfValheimanAssertions);
         }
         finally { AssemblyLoadContext.Default.Resolving -= Resolve; }
     }

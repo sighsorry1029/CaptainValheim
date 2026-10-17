@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+- Added optional Path of Valheiman compatibility. Acquired Shield Throw and Shield Strike nodes take priority for their attack inputs, and CaptainValheim hides the corresponding shield key hints.
+- Yield CaptainValheim Shield Charge to Path of Valheiman's acquired Shield Charge node and prevent both charge controllers from running together, including during node changes.
+- Prevent duplicate projectile reflection when Path of Valheiman successfully launches a parry reflection. CaptainValheim still handles eligible ordinary blocks and provides its existing reflection when Path of Valheiman does not launch a projectile.
+- Keep each mod's damage scaling, block-charge effects, and thrown-item return handling unchanged. Path of Valheiman is optional and is detected by supported method signatures rather than an exact version requirement.
+- Update CaptainValheim on the server and participating clients together to satisfy the existing version check.
+
 ## 1.1.0
 
 - Rebalanced primary strikes, shield throws, and Shield Charge to reduce high-deflection shields' attack push more strongly while retaining a larger share of lower-force shields' push. Existing YAML `pushFactor` settings now multiply the adjusted force; damage, attack ranges, normal blocking, projectile reflection, and Block Charge keep their existing formulas.

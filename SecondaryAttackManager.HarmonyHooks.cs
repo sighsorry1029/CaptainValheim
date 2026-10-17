@@ -276,10 +276,20 @@ internal static class HumanoidBlockAttackPatch
     }
 
     [HarmonyPriority(Priority.First)]
+    [HarmonyBefore(PathOfValheimanReflectionBridge.HarmonyOwner)]
     private static void Postfix(bool __result, HitData hit, ref SecondaryAttackManager.BlockAttackContext? __state)
     {
         try
         {
+            if (PathOfValheimanReflectionBridge.Enabled)
+            {
+                // Snapshot the actual block cost before PoV's on-block refunds.
+                // Its reflection launches later in the postfix chain; decide
+                // whether CV needs a fallback after that chain has completed.
+                SecondaryAttackManager.RecordCompletedBlockAttack(__result, hit, __state);
+                return;
+            }
+
             SecondaryAttackManager.FinalizeBlockAttack(__result, hit, __state);
         }
         catch
@@ -288,7 +298,10 @@ internal static class HumanoidBlockAttackPatch
         }
         finally
         {
-            SecondaryAttackManager.EndShieldReflectBlockAttack(ref __state);
+            if (!PathOfValheimanReflectionBridge.Enabled)
+            {
+                SecondaryAttackManager.EndShieldReflectBlockAttack(ref __state);
+            }
         }
     }
 
@@ -296,7 +309,22 @@ internal static class HumanoidBlockAttackPatch
         Exception? __exception,
         ref SecondaryAttackManager.BlockAttackContext? __state)
     {
-        SecondaryAttackManager.EndShieldReflectBlockAttack(ref __state);
+        try
+        {
+            if (__exception == null && __state is { BlockCompleted: true, Hit: not null })
+            {
+                SecondaryAttackManager.FinalizeBlockAttack(__state.BlockSucceeded, __state.Hit, __state);
+            }
+        }
+        catch
+        {
+            // Optional reflection must not change the block's exception/result.
+        }
+        finally
+        {
+            SecondaryAttackManager.EndShieldReflectBlockAttack(ref __state);
+        }
+
         return __exception;
     }
 }

@@ -111,6 +111,14 @@ Save translation files as UTF-8, then restart Valheim or reselect the language a
 - Can pass shield hit context to WarfareTweaks so configured Warfare effects apply cleanly to shield attacks and shield charges.
 - Designed to coexist with SecondaryAttacks, which handles non-shield ranged, melee, bomb, staff, and Blood Magic behaviors.
 
+### Path of Valheiman
+
+Path of Valheiman is optional. When both mods are installed, acquired Shield Throw and Shield Strike nodes take priority for their primary and secondary attack inputs. CaptainValheim hides the corresponding shield key hints. Acquiring Path of Valheiman's Shield Charge node gives it charge control through its own Block + Run input; CaptainValheim's charge remains available without that node. Both charge controllers are prevented from running together during node changes.
+
+A successful Path of Valheiman parry reflection takes priority over CaptainValheim reflection for that block. Eligible ordinary blocks and blocks where Path of Valheiman does not launch a reflected projectile retain CaptainValheim's existing reflection behavior.
+
+This integration coordinates action ownership. Each mod keeps its own damage formulas, block-charge effects, and item-return rules. It does not add Path of Valheiman's block-power bonuses, projectile chains, or Weapon Return handling to CaptainValheim attacks, or enable CaptainValheim's shield-only attacks with two shields. Supported integration methods are checked at startup without requiring a particular Path of Valheiman version; unavailable integration points are reported in the log.
+
 ## Building
 
 Build against a local Valheim installation with BepInEx and the original game assemblies configured in `environment.props`. Private game members used by the mod are accessed explicitly through cached Harmony accessors.

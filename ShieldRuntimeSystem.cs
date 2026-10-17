@@ -40,6 +40,8 @@ internal static partial class ShieldRuntimeSystem
     {
         definition = null!;
         return player.RightItem != null && GameAccess.BlockingInput(player) &&
+               !PathOfValheimanBridge.BlocksCaptainCharge(player) &&
+               !PathOfValheimanBridge.OwnsSecondary(player) &&
                IsShieldFeatureAllowed(player, player.LeftItem, CaptainValheimPlugin.Settings.WeaponCompatibility.AllowCharge.Value) &&
                TryGetDefinition(player.LeftItem, out definition) &&
                definition.ShieldSpecial is { HasShieldCharge: true, ShieldChargeDistance: > 0f };
@@ -139,6 +141,15 @@ internal static partial class ShieldRuntimeSystem
         ItemDrop.ItemData leftItem,
         ItemDrop.ItemData rightItem)
     {
+        bool pathOwnsAttack = secondaryAttack
+            ? PathOfValheimanBridge.OwnsSecondary(humanoid)
+            : PathOfValheimanBridge.OwnsPrimary(humanoid);
+        if (pathOwnsAttack)
+        {
+            // PoV owns this exact input only while its node and equipment qualify.
+            return true;
+        }
+
         if (secondaryAttack && humanoid is Player localPlayer && localPlayer == Player.m_localPlayer &&
             WeaponChargeInputs.TryGetValue(localPlayer, out WeaponChargeInputState? input) && input.Claimed)
         {
@@ -188,6 +199,14 @@ internal static partial class ShieldRuntimeSystem
         ShieldSpecialMode mode = humanoid is Player player
             ? ResolveShieldSpecialMode(player, secondaryDefinition)
             : ShieldSpecialMode.Throw;
+
+        if (humanoid.IsBlocking() && PathOfValheimanBridge.BlocksCaptainCharge(humanoid))
+        {
+            // A charge gesture must not become an accidental shield throw when
+            // the PoV charge node owns movement. Its block+sprint input remains.
+            result = false;
+            return false;
+        }
 
         if (mode != ShieldSpecialMode.Charge)
         {
@@ -289,7 +308,8 @@ internal static partial class ShieldRuntimeSystem
             return false;
         }
 
-        return definition.ShieldSpecial?.HasShieldPrimaryAttack ?? false;
+        return !PathOfValheimanBridge.OwnsPrimary(humanoid) &&
+               (definition.ShieldSpecial?.HasShieldPrimaryAttack ?? false);
     }
 
     internal static bool TryGetShieldOnlySecondary(Humanoid humanoid, ItemDrop.ItemData? leftItem, ItemDrop.ItemData? rightItem, out ItemDrop.ItemData weapon, out SecondaryAttackDefinition definition)
@@ -300,7 +320,7 @@ internal static partial class ShieldRuntimeSystem
         }
 
         ShieldSpecialSecondaryBehavior? behavior = definition.ShieldSpecial;
-        return behavior != null &&
+        return !PathOfValheimanBridge.OwnsSecondary(humanoid) && behavior != null &&
                (behavior.HasShieldThrow ||
                 (behavior.HasShieldCharge && behavior.ShieldChargeDistance > 0f));
     }

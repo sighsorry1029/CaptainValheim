@@ -120,16 +120,19 @@ internal static class ShieldOnlyKeyHintSystem
         }
 
         bool shieldOnly = rightItem == null;
+        bool pathOwnsPrimary = PathOfValheimanBridge.OwnsPrimary(player);
+        bool pathOwnsSecondary = PathOfValheimanBridge.OwnsSecondary(player);
         bool hasCharge = shieldBehavior.HasShieldCharge && shieldBehavior.ShieldChargeDistance > 0f &&
+                         !pathOwnsSecondary && !PathOfValheimanBridge.BlocksCaptainCharge(player) &&
                          ShieldRuntimeSystem.IsShieldFeatureAllowed(
                              player, leftItem, CaptainValheimPlugin.Settings.WeaponCompatibility.AllowCharge.Value);
         state = new ShieldHintState(
             Localization.instance?.GetSelectedLanguage() ?? "",
             ZInput.IsGamepadActive(),
-            preserveWeaponHints: !shieldOnly,
+            preserveWeaponHints: !shieldOnly || pathOwnsPrimary || pathOwnsSecondary,
             hasCharge,
-            shieldOnly && shieldBehavior.HasShieldPrimaryAttack,
-            shieldOnly && shieldBehavior.HasShieldThrow,
+            shieldOnly && shieldBehavior.HasShieldPrimaryAttack && !pathOwnsPrimary,
+            shieldOnly && shieldBehavior.HasShieldThrow && !pathOwnsSecondary,
             ResolveButtonLabel("Attack"),
             ResolveButtonLabel("Block"),
             ResolveButtonLabel("SecondaryAttack"));
